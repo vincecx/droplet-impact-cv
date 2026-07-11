@@ -11,6 +11,9 @@ from .models import (
     DEFAULT_FPS,
     DEFAULT_MIN_FOREGROUND_DELTA,
     DEFAULT_PIXEL_SIZE_MM,
+    DEFAULT_SURFACE_BAND_PX,
+    DEFAULT_WEAK_PROPAGATION_PX,
+    DEFAULT_WEAK_THRESHOLD_FRACTION,
     REFLECTION_MODES,
     AnalysisConfig,
 )
@@ -38,6 +41,13 @@ def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed < 1:
         raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
+def unit_fraction(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 < parsed <= 1.0:
+        raise argparse.ArgumentTypeError("value must be in the range (0, 1]")
     return parsed
 
 
@@ -145,7 +155,25 @@ def build_parser() -> argparse.ArgumentParser:
             "Weak threshold in gray levels for extending detections across "
             "faint transparent liquid. Pixels above this value count as "
             "foreground only when connected to a pixel above --threshold. "
-            "Default: a quarter of the effective threshold."
+            "Default: --weak-threshold-fraction of the effective threshold."
+        ),
+    )
+    parser.add_argument(
+        "--weak-threshold-fraction",
+        type=unit_fraction,
+        default=DEFAULT_WEAK_THRESHOLD_FRACTION,
+        help=(
+            "Weak threshold as a fraction of the effective strong threshold, "
+            "used when --weak-threshold is not given. Default: 0.25"
+        ),
+    )
+    parser.add_argument(
+        "--weak-propagation-px",
+        type=nonnegative_int,
+        default=DEFAULT_WEAK_PROPAGATION_PX,
+        help=(
+            "Maximum distance in pixels that weak-threshold detections extend "
+            "from a strong detection. Default: 40"
         ),
     )
     parser.add_argument(
@@ -167,16 +195,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Morphology radius for mask cleanup.",
     )
     parser.add_argument(
-        "--measure-above-surface-px",
+        "--surface-band-px",
         type=nonnegative_int,
-        default=20,
-        help="Measurement window above detected surface.",
+        default=DEFAULT_SURFACE_BAND_PX,
+        help=(
+            "Half-height in pixels of the band around the surface line within "
+            "which the spreading width is measured. Default: 3"
+        ),
     )
     parser.add_argument(
         "--measure-below-surface-px",
         type=nonnegative_int,
         default=220,
-        help="Measurement window below detected surface.",
+        help="Foreground ROI depth below the surface line.",
     )
     parser.add_argument(
         "--touch-above-surface-px",
@@ -194,7 +225,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--min-touch-pixels",
         type=nonnegative_int,
         default=30,
-        help="Minimum foreground pixels near surface to mark impact.",
+        help=(
+            "Minimum foreground pixels just above the surface line for a "
+            "component to be selected as the droplet. Default: 30"
+        ),
+    )
+    parser.add_argument(
+        "--min-impact-width-px",
+        type=nonnegative_int,
+        default=30,
+        help=(
+            "Minimum spreading width in the surface band for a frame to be "
+            "marked as the impact frame. Default: 30"
+        ),
     )
     parser.add_argument(
         "--include-pre-impact",
@@ -266,14 +309,17 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         reflection_mode=args.reflection_mode,
         threshold=args.threshold,
         weak_threshold=args.weak_threshold,
+        weak_threshold_fraction=args.weak_threshold_fraction,
+        weak_propagation_px=args.weak_propagation_px,
         min_foreground_delta=args.min_foreground_delta,
         min_area_px=int(args.min_area_px),
         morphology_radius_px=args.morphology_radius_px,
-        measure_above_surface_px=args.measure_above_surface_px,
+        surface_band_px=args.surface_band_px,
         measure_below_surface_px=args.measure_below_surface_px,
         touch_above_surface_px=args.touch_above_surface_px,
         touch_below_surface_px=args.touch_below_surface_px,
         min_touch_pixels=args.min_touch_pixels,
+        min_impact_width_px=args.min_impact_width_px,
         include_pre_impact=args.include_pre_impact,
         time_zero=args.time_zero,
         debug_dir=args.debug_dir or output_dir / "debug_overlays",

@@ -4,7 +4,6 @@ from dataclasses import replace
 from pathlib import Path
 
 from .imaging import (
-    DEFAULT_WEAK_THRESHOLD_FRACTION,
     build_background,
     component_measurement,
     detect_reflection_mode_from_frame,
@@ -32,7 +31,7 @@ from .visualization import clear_debug_overlays, write_debug_overlay
 def resolve_weak_threshold(config: AnalysisConfig, threshold: float) -> float:
     if config.weak_threshold is not None:
         return float(config.weak_threshold)
-    return threshold * DEFAULT_WEAK_THRESHOLD_FRACTION
+    return threshold * config.weak_threshold_fraction
 
 
 def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:

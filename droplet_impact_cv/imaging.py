@@ -10,16 +10,19 @@ import tifffile
 from scipy import ndimage as ndi
 from scipy.signal import find_peaks
 
-from .models import AnalysisConfig, ComponentMeasurement, SurfaceLine
+from .models import (
+    DEFAULT_SURFACE_BAND_PX,
+    DEFAULT_WEAK_PROPAGATION_PX,
+    AnalysisConfig,
+    ComponentMeasurement,
+    SurfaceLine,
+)
 
 
 SURFACE_MASK_BELOW_TOLERANCE_PX = 0
-SURFACE_MEASURE_BAND_PX = 3
 FRAME_NUMBER_PATTERN = re.compile(r"(?<!\d)(\d{6})$")
 SUPPORTED_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg")
 MAX_REFLECTION_SYMMETRY_ERROR = 0.1
-DEFAULT_WEAK_THRESHOLD_FRACTION = 0.25
-WEAK_PROPAGATION_MAX_PX = 40
 
 
 def natural_sort_key(path: Path) -> list[int | str]:
@@ -158,6 +161,7 @@ def hysteresis_change_mask(
     threshold: float,
     weak_threshold: float | None,
     roi: np.ndarray | None = None,
+    max_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
 ) -> np.ndarray:
     """Detect changed pixels with an optional weak-threshold extension.
 
@@ -183,7 +187,7 @@ def hysteresis_change_mask(
     # touches the droplet cannot pull the whole artifact into the mask.
     # Transparent-film interiors sit well within this distance of a strong
     # rim or highlight detection.
-    return ndi.binary_dilation(strong, mask=weak, iterations=WEAK_PROPAGATION_MAX_PX)
+    return ndi.binary_dilation(strong, mask=weak, iterations=max_propagation_px)
 
 
 def foreground_mask(
@@ -198,7 +202,14 @@ def foreground_mask(
     yy, xx = np.indices(image.shape)
     distance_from_surface = yy - surface_line.y_at(xx, image.shape[1])
     roi = distance_from_surface <= config.measure_below_surface_px
-    changed = hysteresis_change_mask(image, background, threshold, weak_threshold, roi)
+    changed = hysteresis_change_mask(
+        image,
+        background,
+        threshold,
+        weak_threshold,
+        roi,
+        config.weak_propagation_px,
+    )
     return clean_binary_mask(changed.astype(np.uint8), structure)
 
 
@@ -208,8 +219,15 @@ def full_foreground_mask(
     threshold: float,
     structure: np.ndarray,
     weak_threshold: float | None = None,
+    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
 ) -> np.ndarray:
-    changed = hysteresis_change_mask(image, background, threshold, weak_threshold)
+    changed = hysteresis_change_mask(
+        image,
+        background,
+        threshold,
+        weak_threshold,
+        max_propagation_px=weak_propagation_px,
+    )
     return clean_binary_mask(changed, structure)
 
 
@@ -333,7 +351,7 @@ def spreading_profile_on_surface(
 def surface_intersection_bounds(
     component: np.ndarray,
     surface_line: SurfaceLine,
-    band_px: int = SURFACE_MEASURE_BAND_PX,
+    band_px: int = DEFAULT_SURFACE_BAND_PX,
 ) -> tuple[int, int] | None:
     """Outermost x bounds where the silhouette meets the surface-line band.
 
@@ -397,7 +415,7 @@ def component_measurement(
     # band around the fixed surface line; a droplet that stays clear of the
     # band measures zero. Measured before the clip below so that the part of
     # the band under the line participates.
-    bounds = surface_intersection_bounds(component, surface_line)
+    bounds = surface_intersection_bounds(component, surface_line, config.surface_band_px)
 
     # The reported mask and area cover only the liquid on and above the line.
     component &= surface_band_mask(
@@ -423,7 +441,7 @@ def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -
     if measurement.bbox is None:
         return False
     x_min, _y_min, x_max, _y_max = measurement.bbox
-    return (x_max - x_min + 1) >= config.min_touch_pixels
+    return (x_max - x_min + 1) >= config.min_impact_width_px
 
 
 def select_calibration_component(
@@ -668,6 +686,7 @@ def calibration_frame_mask(
     threshold: float,
     structure: np.ndarray,
     weak_threshold: float | None = None,
+    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
 ) -> np.ndarray:
     matching_file = next(
         (path for path in files if frame_number_from_filename(path) == frame_number),
@@ -681,6 +700,7 @@ def calibration_frame_mask(
         threshold,
         structure,
         weak_threshold,
+        weak_propagation_px,
     )
 
 
@@ -701,6 +721,7 @@ def detect_reflection_mode_from_frame(
         threshold,
         structure,
         weak_threshold,
+        config.weak_propagation_px,
     )
     return detect_reflection_mode(mask, coarse_surface_y, config)
 
@@ -811,6 +832,7 @@ def estimate_surface_line_from_nonreflection_frame(
         threshold,
         structure,
         weak_threshold,
+        config.weak_propagation_px,
     )
     component = select_nonreflection_calibration_component(mask, config)
     if component is None:
@@ -839,6 +861,7 @@ def estimate_surface_line_from_symmetry_frame(
         threshold,
         structure,
         weak_threshold,
+        config.weak_propagation_px,
     )
     selected = select_calibration_component(mask, coarse_surface_y, config)
     if selected is None:

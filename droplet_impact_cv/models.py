@@ -12,6 +12,9 @@ DEFAULT_PIXEL_SIZE_MM = 0.00711883341
 DEFAULT_SURFACE_ANGLE_DEG = -0.6
 DEFAULT_MIN_FOREGROUND_DELTA = 1500.0
 DEFAULT_THRESHOLD_SAMPLE_FRAMES = 8
+DEFAULT_SURFACE_BAND_PX = 3
+DEFAULT_WEAK_PROPAGATION_PX = 40
+DEFAULT_WEAK_THRESHOLD_FRACTION = 0.25
 REFLECTION_MODES = ("auto", "mirror", "none")
 
 
@@ -27,16 +30,19 @@ class AnalysisConfig:
     reflection_mode: str = "auto"
     threshold: float | None = None
     weak_threshold: float | None = None
+    weak_threshold_fraction: float = DEFAULT_WEAK_THRESHOLD_FRACTION
+    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX
     min_foreground_delta: float = DEFAULT_MIN_FOREGROUND_DELTA
     min_area_px: int = 250
     morphology_radius_px: int = 3
     surface_search_start_px: int = 50
     surface_drop_delta: float = 100.0
-    measure_above_surface_px: int = 20
+    surface_band_px: int = DEFAULT_SURFACE_BAND_PX
     measure_below_surface_px: int = 220
     touch_above_surface_px: int = 20
     touch_below_surface_px: int = 170
     min_touch_pixels: int = 30
+    min_impact_width_px: int = 30
     include_pre_impact: bool = False
     time_zero: str = "impact"
     debug_dir: Path | None = Path("outputs/debug_overlays")

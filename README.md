@@ -87,11 +87,13 @@ dark substrate is still detected.
 
 Detection uses two thresholds. Pixels whose absolute change exceeds
 `--threshold` (default: automatic, at least `--min-foreground-delta`) are
-reliable foreground. Pixels above the weak threshold (default: a quarter of
-the effective strong threshold, override with `--weak-threshold`) are included
-only when they are connected to reliable foreground within a bounded distance.
-This recovers the faint interior of a nearly transparent liquid film while
-rejecting isolated weak artifacts such as diffuse out-of-focus shadows.
+reliable foreground. Pixels above the weak threshold are included only when
+they are connected to reliable foreground within `--weak-propagation-px` pixels
+(default: 40). The weak threshold defaults to `--weak-threshold-fraction` of the
+effective strong threshold (default: `0.25`) and can be set directly with
+`--weak-threshold`. This recovers the faint interior of a nearly transparent
+liquid film while rejecting isolated weak artifacts such as diffuse
+out-of-focus shadows.
 
 ## Outputs
 
@@ -102,9 +104,11 @@ overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
 choose a different directory for debug overlays.
 
 The reported spreading diameter is the maximum width of the detected liquid
-silhouette within 3 px above or below the fixed surface line: the distance
-between the outermost points where the silhouette enters that band. Frames
-where the silhouette stays clear of the band report a diameter of `0`.
+silhouette within `--surface-band-px` pixels above or below the fixed surface
+line (default: 3): the distance between the outermost points where the
+silhouette enters that band. Frames where the silhouette stays clear of the
+band report a diameter of `0`. A frame is marked as the impact frame once this
+width reaches `--min-impact-width-px` (default: 30).
 
 Debug overlays are written selectively rather than for every frame. Each run
 first deletes any frame-numbered overlay PNGs already in the target directory,
