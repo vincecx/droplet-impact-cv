@@ -21,7 +21,7 @@ class CliConfigTests(unittest.TestCase):
                 "# Experiment settings\n"
                 "--fps 4000\n"
                 "--pixel-size-mm 0.01682736321\n"
-                "--surface-frame 9105\n"
+                "--calibration-frame 9105\n"
                 "--reflection-mode none\n",
                 encoding="utf-8",
             )
@@ -99,15 +99,88 @@ class CliConfigTests(unittest.TestCase):
 
     def test_surface_angle_is_automatic_unless_explicitly_overridden(self) -> None:
         parser = build_parser()
-        automatic = config_from_args(parser.parse_args(["--surface-frame", "189"]))
+        automatic = config_from_args(parser.parse_args(["--calibration-frame", "189"]))
         overridden = config_from_args(
             parser.parse_args(
-                ["--surface-frame", "189", "--surface-angle-deg", "1.25"]
+                ["--calibration-frame", "189", "--surface-angle-deg", "1.25"]
             )
         )
 
         self.assertIsNone(automatic.surface_angle_deg)
         self.assertEqual(overridden.surface_angle_deg, 1.25)
+
+    def test_canonical_detection_parameter_names_map_to_analysis_config(self) -> None:
+        config = config_from_args(
+            build_parser().parse_args(
+                [
+                    "--surface-y-px",
+                    "800",
+                    "--strong-threshold",
+                    "1800",
+                    "--weak-threshold",
+                    "450",
+                    "--weak-threshold-ratio",
+                    "0.3",
+                    "--weak-reach-px",
+                    "32",
+                    "--min-strong-threshold",
+                    "1200",
+                    "--min-droplet-area-px",
+                    "300",
+                    "--foreground-depth-px",
+                    "200",
+                    "--contact-above-px",
+                    "18",
+                    "--contact-below-px",
+                    "160",
+                    "--min-contact-pixels",
+                    "25",
+                    "--debug-interval",
+                    "5",
+                ]
+            )
+        )
+
+        self.assertEqual(config.surface_y, 800)
+        self.assertEqual(config.threshold, 1800.0)
+        self.assertEqual(config.weak_threshold, 450.0)
+        self.assertEqual(config.weak_threshold_fraction, 0.3)
+        self.assertEqual(config.weak_propagation_px, 32)
+        self.assertEqual(config.min_foreground_delta, 1200.0)
+        self.assertEqual(config.min_area_px, 300)
+        self.assertEqual(config.measure_below_surface_px, 200)
+        self.assertEqual(config.touch_above_surface_px, 18)
+        self.assertEqual(config.touch_below_surface_px, 160)
+        self.assertEqual(config.min_touch_pixels, 25)
+        self.assertEqual(config.debug_every, 5)
+
+    def test_debug_interval_defaults_to_one(self) -> None:
+        config = config_from_args(build_parser().parse_args([]))
+
+        self.assertEqual(config.debug_every, 1)
+
+    def test_renamed_parameters_are_rejected(self) -> None:
+        parser = build_parser()
+        old_options = (
+            "--output",
+            "--surface-y",
+            "--surface-frame",
+            "--threshold",
+            "--weak-threshold-fraction",
+            "--weak-propagation-px",
+            "--min-foreground-delta",
+            "--min-area-px",
+            "--measure-below-surface-px",
+            "--touch-above-surface-px",
+            "--touch-below-surface-px",
+            "--min-touch-pixels",
+            "--debug-every",
+        )
+
+        for option in old_options:
+            with self.subTest(option=option), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit):
+                    parser.parse_args([option, "1"])
 
     def test_command_line_overrides_configured_reflection_mode(self) -> None:
         with TemporaryDirectory() as temporary_dir:

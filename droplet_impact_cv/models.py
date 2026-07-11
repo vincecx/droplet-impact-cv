@@ -46,7 +46,7 @@ class AnalysisConfig:
     include_pre_impact: bool = False
     time_zero: str = "impact"
     debug_dir: Path | None = Path("outputs/debug_overlays")
-    debug_every: int = 25
+    debug_every: int = 1
     start_frame: int | None = None
     end_frame: int | None = None
 

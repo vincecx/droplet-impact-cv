@@ -20,80 +20,108 @@ The project uses `uv` for dependency and environment management.
 uv run droplet-impact-cv sourcedata/example
 ```
 
-Default physical parameters:
-
-- frame rate: `8000` fps
-- pixel size: `0.00711883341` mm/px
-
-Common overrides:
+An experiment-specific command typically looks like this:
 
 ```bash
 uv run droplet-impact-cv path/to/tiff_frames \
   --fps 8000 \
   --pixel-size-mm 0.00711883341 \
-  --surface-frame 61 \
-  -o outputs/example/spreading_diameter.csv \
-  --debug-every 1
+  --calibration-frame 61 \
+  --reflection-mode auto \
+  --debug-interval 1
 ```
 
-Use `--start-frame 20 --end-frame 120` to process only files whose six-digit
-filename frame number is in the inclusive range 20 through 120. Either option
-can be omitted to leave that side of the range unbounded. When `--start-frame`
-is specified, the first frame in the selected range is used as the background.
+### Runtime logic
 
-The program automatically reads command-line-style options from
-`<input-folder>/cv_config.txt` when that file exists. Blank lines and comments
-starting with `#` are allowed. For example:
+1. Read the TIFF/JPEG frames whose filenames end in a six-digit frame number,
+   then optionally restrict them with `--start-frame` and `--end-frame`.
+2. Use the first selected frame as the clean background. Detect a coarse
+   substrate edge from that image.
+3. If `--calibration-frame` is set, calibrate one fixed surface line from the
+   impacted droplet in that frame. `--reflection-mode` controls whether the
+   droplet reflection participates in this calibration.
+4. Subtract each frame from the background in both intensity directions. A
+   strong threshold identifies reliable foreground; a connected weak threshold
+   recovers faint, transparent liquid without admitting isolated weak artifacts.
+5. Clean the foreground mask, select the component contacting the surface, fill
+   its enclosed interior, and measure its outermost span inside the surface band.
+6. Detect impact when that span reaches `--min-impact-width-px`, convert pixels
+   to millimetres and frames to time, then write the CSV and selected overlays.
+
+The detected foreground therefore represents image change, not specifically a
+dark object. Transparent liquid that brightens a dark substrate can still be
+part of the droplet silhouette.
+
+Surface calibration uses `mirror` to fit the contact vertices between a droplet
+and its strong reflection, or `none` to fit the impacted droplet's lower
+contour. The default `auto` mode conservatively selects `mirror` only when the
+silhouette provides strong reflection evidence. Set the mode explicitly for
+transparent droplets, weak reflections, or backgrounds with multiple
+horizontal edges.
+
+Surface angles are clockwise from horizontal. Without a calibration frame or
+explicit `--surface-angle-deg`, the fallback is `-0.6` degrees. A manual
+`--surface-y-px` overrides the calibrated surface-line centre.
+
+### CLI parameter summary
+
+Options can also be placed in `<input-folder>/cv_config.txt`, one or more per
+line. Blank lines and `#` comments are allowed. Precedence is: explicit CLI
+options, `cv_config.txt`, then program defaults.
 
 ```text
 --fps 4000
 --pixel-size-mm 0.01682736321
---surface-frame 9105
+--calibration-frame 9105
 --reflection-mode mirror
 ```
 
-Configuration precedence is: explicit command-line options, then
-`cv_config.txt`, then the defaults defined by the program. For example,
-`--fps 8000` on the command line overrides `--fps 4000` in `cv_config.txt`.
+The names below are the names shown by `--help` and accepted by the CLI.
 
-Use `--surface-frame` to select a frame containing an impacted droplet, then use
-`--reflection-mode` to choose how the surface line is calibrated from it. The
-calibrated line is the single fixed surface reference for every frame.
+#### Key parameters
 
-- `mirror`: fit the surface through the contact vertices between the droplet and
-  its strong reflection.
-- `none`: fit the surface to the lower contour of the impacted droplet in the
-  selected surface frame; weak reflections are treated as `none`.
-- `auto` (default): use `mirror` only when the calibration silhouette provides
-  strong reflection evidence; otherwise use `none`.
+These cover input selection, physical calibration, surface calibration, and the
+settings most useful when tuning the detected droplet contour.
 
-Automatic classification is deliberately conservative. Set the mode explicitly
-in `cv_config.txt` or on the command line for transparent droplets, weak
-reflections, or backgrounds with multiple horizontal edges. Command-line values
-override the per-folder configuration as usual.
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `input_dir` | `sourcedata/example` | Folder containing numbered TIFF/JPEG frames and optional `cv_config.txt`. |
+| `--start-frame`, `--end-frame` | unbounded | Inclusive filename frame-number range; the first selected frame becomes the background. |
+| `--fps` | `8000` | Camera frame rate used to calculate `time_ms`. |
+| `--pixel-size-mm` | `0.00711883341` | Physical length represented by one pixel. |
+| `--calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
+| `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
+| `--surface-y-px` | automatic | Manually override the surface-line centre y coordinate. |
+| `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
+| `--strong-threshold` | automatic | Strong absolute background-change threshold. |
+| `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
+| `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
+| `--weak-threshold-ratio` | `0.25` | Weak/strong threshold ratio when no explicit weak threshold is set. |
+| `--weak-reach-px` | `40` | Maximum distance weak foreground may grow from strong foreground. |
+| `--min-droplet-area-px` | `250` | Reject connected components smaller than this pixel count. |
+| `--morphology-radius-px` | `3` | Radius used to close/fill the mask and remove small artifacts. |
+| `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
 
-Surface angles are measured clockwise from horizontal. Use
-`--surface-angle-deg` to override the automatically detected angle. If no
-`--surface-frame` or explicit angle is provided, the fallback is `-0.6` degrees
-(that is, `0.6` degrees counterclockwise). Use `--surface-y` to manually override
-the calibrated surface-line center pixel coordinate.
+Threshold tuning usually starts with `--strong-threshold`. For a faint
+transparent interior, lower `--weak-threshold-ratio` or set `--weak-threshold`
+directly; keep `--weak-reach-px` only as large as needed to bridge the liquid
+interior. If noise forms separate components, tune `--min-droplet-area-px` and
+`--morphology-radius-px` instead.
 
-## Foreground detection
+#### Other parameters
 
-The droplet is not assumed to be dark. A pixel counts as foreground when its
-gray level differs from the background frame in either direction, so a
-transparent droplet that refracts the backlight and appears brighter than a
-dark substrate is still detected.
-
-Detection uses two thresholds. Pixels whose absolute change exceeds
-`--threshold` (default: automatic, at least `--min-foreground-delta`) are
-reliable foreground. Pixels above the weak threshold are included only when
-they are connected to reliable foreground within `--weak-propagation-px` pixels
-(default: 40). The weak threshold defaults to `--weak-threshold-fraction` of the
-effective strong threshold (default: `0.25`) and can be set directly with
-`--weak-threshold`. This recovers the faint interior of a nearly transparent
-liquid film while rejecting isolated weak artifacts such as diffuse
-out-of-focus shadows.
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `-o`, `--output-csv` | `outputs/<input-folder>/spreading_diameter.csv` | CSV output path. |
+| `--foreground-depth-px` | `220` | Foreground ROI depth below the surface. |
+| `--contact-above-px` | `20` | Component-selection window above the surface. |
+| `--contact-below-px` | `170` | Component-selection window below the surface. |
+| `--min-contact-pixels` | `30` | Required foreground pixel count just above the surface. |
+| `--min-impact-width-px` | `30` | Width that marks the first impact frame. |
+| `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
+| `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
+| `--debug-dir` | `outputs/<input-folder>/debug_overlays` | Diagnostic overlay directory. |
+| `--debug-interval` | `1` | Write one periodic overlay every N frames. |
 
 ## Outputs
 

@@ -57,6 +57,7 @@ def default_output_dir(input_dir: Path) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         description=(
             "Measure droplet spreading diameter from high-speed TIFF sequences. "
             "Options in <input_dir>/cv_config.txt are loaded automatically; "
@@ -72,9 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-o",
-        "--output",
+        "--output-csv",
         dest="output_csv",
         type=Path,
+        metavar="PATH",
         default=None,
         help="Output CSV path. Default: outputs/<input-folder>/spreading_diameter.csv",
     )
@@ -109,14 +111,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Physical length per pixel in mm. Default: 0.00711883341",
     )
     parser.add_argument(
-        "--surface-y",
+        "--surface-y-px",
+        dest="surface_y",
         type=nonnegative_int,
+        metavar="Y",
         default=None,
         help="Override detected surface y coordinate in pixels.",
     )
     parser.add_argument(
-        "--surface-frame",
+        "--calibration-frame",
+        dest="surface_frame",
         type=nonnegative_int,
+        metavar="FRAME",
         default=None,
         help=(
             "Frame number containing an impacted droplet, used to calibrate "
@@ -138,29 +144,35 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override surface angle in clockwise degrees. By default the angle is "
-            "detected from --surface-frame, or -0.6 when no calibration frame is given."
+            "detected from --calibration-frame, or -0.6 when no calibration frame is given."
         ),
     )
     parser.add_argument(
-        "--threshold",
+        "--strong-threshold",
+        dest="threshold",
         type=positive_float,
+        metavar="VALUE",
         default=None,
         help="Override foreground change threshold in gray levels.",
     )
     parser.add_argument(
         "--weak-threshold",
+        dest="weak_threshold",
         type=positive_float,
+        metavar="VALUE",
         default=None,
         help=(
             "Weak threshold in gray levels for extending detections across "
             "faint transparent liquid. Pixels above this value count as "
-            "foreground only when connected to a pixel above --threshold. "
-            "Default: --weak-threshold-fraction of the effective threshold."
+            "foreground only when connected to a pixel above --strong-threshold. "
+            "Default: --weak-threshold-ratio of the effective threshold."
         ),
     )
     parser.add_argument(
-        "--weak-threshold-fraction",
+        "--weak-threshold-ratio",
+        dest="weak_threshold_fraction",
         type=unit_fraction,
+        metavar="RATIO",
         default=DEFAULT_WEAK_THRESHOLD_FRACTION,
         help=(
             "Weak threshold as a fraction of the effective strong threshold, "
@@ -168,8 +180,10 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--weak-propagation-px",
+        "--weak-reach-px",
+        dest="weak_propagation_px",
         type=nonnegative_int,
+        metavar="DISTANCE",
         default=DEFAULT_WEAK_PROPAGATION_PX,
         help=(
             "Maximum distance in pixels that weak-threshold detections extend "
@@ -177,14 +191,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--min-foreground-delta",
+        "--min-strong-threshold",
+        dest="min_foreground_delta",
         type=positive_float,
+        metavar="VALUE",
         default=DEFAULT_MIN_FOREGROUND_DELTA,
         help="Lower bound for automatic threshold. Default: 1500",
     )
     parser.add_argument(
-        "--min-area-px",
+        "--min-droplet-area-px",
+        dest="min_area_px",
         type=positive_float,
+        metavar="AREA",
         default=250,
         help="Minimum liquid component area in pixels.",
     )
@@ -204,26 +222,34 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--measure-below-surface-px",
+        "--foreground-depth-px",
+        dest="measure_below_surface_px",
         type=nonnegative_int,
+        metavar="DEPTH",
         default=220,
         help="Foreground ROI depth below the surface line.",
     )
     parser.add_argument(
-        "--touch-above-surface-px",
+        "--contact-above-px",
+        dest="touch_above_surface_px",
         type=nonnegative_int,
+        metavar="DISTANCE",
         default=20,
         help="Impact detection window above surface.",
     )
     parser.add_argument(
-        "--touch-below-surface-px",
+        "--contact-below-px",
+        dest="touch_below_surface_px",
         type=nonnegative_int,
+        metavar="DISTANCE",
         default=170,
         help="Impact detection window below surface.",
     )
     parser.add_argument(
-        "--min-touch-pixels",
+        "--min-contact-pixels",
+        dest="min_touch_pixels",
         type=nonnegative_int,
+        metavar="COUNT",
         default=30,
         help=(
             "Minimum foreground pixels just above the surface line for a "
@@ -258,9 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for overlay PNG diagnostics. Default: outputs/<input-folder>/debug_overlays",
     )
     parser.add_argument(
-        "--debug-every",
-        type=int,
-        default=25,
+        "--debug-interval",
+        dest="debug_every",
+        type=positive_int,
+        metavar="FRAMES",
+        default=1,
         help="Write one debug overlay every N frames.",
     )
     return parser

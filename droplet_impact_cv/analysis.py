@@ -138,7 +138,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
     if config.surface_y is not None:
         surface_line = SurfaceLine(float(int(config.surface_y)), surface_angle_deg)
     elif calibrated_surface_line is not None:
-        # The line calibrated from --surface-frame is the single fixed
+        # The line calibrated from --calibration-frame is the single fixed
         # reference used verbatim for every frame in the sequence.
         surface_line = calibrated_surface_line
     else:
