@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import math
 from dataclasses import replace
 from pathlib import Path
 
 from .imaging import (
+    DEFAULT_WEAK_THRESHOLD_FRACTION,
     build_background,
     component_measurement,
     detect_reflection_mode_from_frame,
@@ -26,7 +26,13 @@ from .models import (
     FrameMeasurement,
     SurfaceLine,
 )
-from .visualization import write_debug_overlay
+from .visualization import clear_debug_overlays, write_debug_overlay
+
+
+def resolve_weak_threshold(config: AnalysisConfig, threshold: float) -> float:
+    if config.weak_threshold is not None:
+        return float(config.weak_threshold)
+    return threshold * DEFAULT_WEAK_THRESHOLD_FRACTION
 
 
 def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
@@ -78,6 +84,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             config.min_foreground_delta,
         )
     )
+    preliminary_weak_threshold = resolve_weak_threshold(config, preliminary_threshold)
     calibrated_surface_line: SurfaceLine | None = None
     resolved_reflection_mode = config.reflection_mode
     if config.surface_frame is not None:
@@ -90,6 +97,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 coarse_surface_y,
                 config,
                 structure,
+                weak_threshold=preliminary_weak_threshold,
             )
         if resolved_reflection_mode == "mirror":
             calibrated_surface_line = estimate_surface_line_from_symmetry_frame(
@@ -101,6 +109,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 config,
                 structure,
                 angle_override_deg=config.surface_angle_deg,
+                weak_threshold=preliminary_weak_threshold,
             )
         else:
             calibrated_surface_line = estimate_surface_line_from_nonreflection_frame(
@@ -111,20 +120,14 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 config,
                 structure,
                 angle_override_deg=config.surface_angle_deg,
+                weak_threshold=preliminary_weak_threshold,
             )
     elif resolved_reflection_mode == "auto":
-        # Without a calibration frame there is not enough evidence to change
-        # the original mirror-surface measurement behavior safely.
+        # Without a calibration frame there is no silhouette evidence to
+        # classify, so mirror mode is assumed.
         resolved_reflection_mode = "mirror"
 
     effective_config = replace(config, reflection_mode=resolved_reflection_mode)
-
-    if config.surface_y is not None:
-        surface_y = int(config.surface_y)
-    elif calibrated_surface_line is not None:
-        surface_y = calibrated_surface_line.center_y_int()
-    else:
-        surface_y = coarse_surface_y
 
     if calibrated_surface_line is not None:
         surface_angle_deg = calibrated_surface_line.angle_deg
@@ -132,7 +135,15 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         surface_angle_deg = config.surface_angle_deg
     else:
         surface_angle_deg = DEFAULT_SURFACE_ANGLE_DEG
-    surface_line = SurfaceLine(float(surface_y), surface_angle_deg)
+
+    if config.surface_y is not None:
+        surface_line = SurfaceLine(float(int(config.surface_y)), surface_angle_deg)
+    elif calibrated_surface_line is not None:
+        # The line calibrated from --surface-frame is the single fixed
+        # reference used verbatim for every frame in the sequence.
+        surface_line = calibrated_surface_line
+    else:
+        surface_line = SurfaceLine(float(coarse_surface_y), surface_angle_deg)
 
     threshold = (
         float(config.threshold)
@@ -140,11 +151,15 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         else estimate_threshold(
             files,
             background,
-            surface_y,
+            surface_line.center_y_int(),
             DEFAULT_THRESHOLD_SAMPLE_FRAMES,
             config.min_foreground_delta,
         )
     )
+    weak_threshold = resolve_weak_threshold(config, threshold)
+
+    if config.debug_dir is not None:
+        clear_debug_overlays(config.debug_dir)
 
     pending: list[tuple[int, Path, float, int]] = []
     impact_frame: int | None = None
@@ -159,14 +174,11 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             threshold,
             effective_config,
             structure,
+            weak_threshold=weak_threshold,
         )
         measurement = component_measurement(mask, surface_line, effective_config)
-        is_touching = touches_surface(
-            measurement.mask,
-            surface_line,
-            effective_config,
-        )
-        if impact_frame is None and is_touching and not math.isnan(measurement.diameter_px):
+        is_touching = touches_surface(measurement, effective_config)
+        if impact_frame is None and is_touching:
             impact_frame = frame_number
         pending.append(
             (
@@ -182,11 +194,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             or frame_number % config.debug_every == 0
             or (is_touching and abs(frame_number - (impact_frame or frame_number)) <= 2)
         ):
-            diameter_mm = (
-                measurement.diameter_px * config.pixel_size_mm
-                if not math.isnan(measurement.diameter_px)
-                else math.nan
-            )
+            diameter_mm = measurement.diameter_px * config.pixel_size_mm
             debug_path = config.debug_dir / f"{frame_number:06d}.png"
             write_debug_overlay(
                 debug_path,
@@ -210,7 +218,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         if not config.include_pre_impact and impact_frame is not None and frame_number < impact_frame:
             continue
 
-        diameter_mm = diameter_px * config.pixel_size_mm if not math.isnan(diameter_px) else math.nan
+        diameter_mm = diameter_px * config.pixel_size_mm
         measurements.append(
             FrameMeasurement(
                 frame_number=frame_number,

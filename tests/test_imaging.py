@@ -82,6 +82,77 @@ class ForegroundMaskTests(unittest.TestCase):
         self.assertEqual(mask[30, 30], 1)
         self.assertEqual(mask[41, 30], 0)
 
+    def test_bright_droplet_is_detected_as_foreground(self) -> None:
+        background = np.full((60, 60), 1000, dtype=np.float32)
+        image = background.copy()
+        image[15:40, 20:40] = 3000  # Refracted backlight: brighter than background.
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            debug_dir=None,
+        )
+
+        mask = foreground_mask(
+            image,
+            background,
+            SurfaceLine(45.0, angle_deg=0.0),
+            DEFAULT_MIN_FOREGROUND_DELTA,
+            config,
+            make_structure(1),
+        )
+
+        self.assertEqual(mask[30, 30], 1)
+
+    def test_weak_threshold_extends_strong_detections_only_when_connected(self) -> None:
+        background = np.full((60, 90), 4000, dtype=np.float32)
+        image = background.copy()
+        image[20:40, 10:20] = 2000  # Strong rim: delta 2000.
+        image[20:40, 20:40] = 3400  # Faint film interior attached to the rim: delta 600.
+        image[20:40, 60:80] = 3400  # Isolated faint artifact: delta 600.
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            debug_dir=None,
+        )
+
+        mask = foreground_mask(
+            image,
+            background,
+            SurfaceLine(45.0, angle_deg=0.0),
+            DEFAULT_MIN_FOREGROUND_DELTA,
+            config,
+            make_structure(1),
+            weak_threshold=500.0,
+        )
+
+        self.assertEqual(mask[30, 15], 1)
+        self.assertEqual(mask[30, 30], 1)
+        self.assertEqual(mask[30, 70], 0)
+
+    def test_weak_extension_growth_is_distance_bounded(self) -> None:
+        background = np.full((30, 200), 4000, dtype=np.float32)
+        image = background.copy()
+        image[10:20, 5:10] = 2000  # Strong seed.
+        image[10:20, 10:190] = 3400  # Long faint strip attached to the seed.
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            debug_dir=None,
+        )
+
+        mask = foreground_mask(
+            image,
+            background,
+            SurfaceLine(25.0, angle_deg=0.0),
+            DEFAULT_MIN_FOREGROUND_DELTA,
+            config,
+            make_structure(1),
+            weak_threshold=500.0,
+        )
+
+        self.assertEqual(mask[15, 30], 1)
+        self.assertEqual(mask[15, 180], 0)
+
     def test_connected_thin_contact_boundary_survives_cleanup(self) -> None:
         background = np.full((80, 100), 4000, dtype=np.float32)
         dark_foreground = np.zeros(background.shape, dtype=np.uint8)
@@ -151,9 +222,28 @@ class ComponentMeasurementTests(unittest.TestCase):
         self.assertEqual(measurement.diameter_px, 60.0)
         self.assertTrue(measurement.mask[50, 50])
 
-    def test_nonreflection_mode_projects_contact_band_above_surface(self) -> None:
+    def test_component_clear_of_surface_band_measures_zero(self) -> None:
         mask = np.zeros((80, 100), dtype=np.uint8)
-        mask[30:48, 20:80] = 1
+        mask[30:44, 20:80] = 1  # Bottom row 43: 7 px above the line, outside +-3.
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            reflection_mode="none",
+            min_area_px=1,
+            min_touch_pixels=1,
+            touch_above_surface_px=10,
+            debug_dir=None,
+        )
+
+        measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
+
+        self.assertEqual(measurement.diameter_px, 0.0)
+        self.assertIsNone(measurement.bbox)
+        self.assertGreater(measurement.area_px, 0)
+
+    def test_component_within_band_above_line_is_measured(self) -> None:
+        mask = np.zeros((80, 100), dtype=np.uint8)
+        mask[30:48, 20:80] = 1  # Bottom row 47: 3 px above the line, inside the band.
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
@@ -161,6 +251,26 @@ class ComponentMeasurementTests(unittest.TestCase):
             min_area_px=1,
             min_touch_pixels=1,
             touch_above_surface_px=5,
+            debug_dir=None,
+        )
+
+        measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
+
+        self.assertEqual(measurement.diameter_px, 60.0)
+
+    def test_fragmented_surface_intersection_measures_outer_span(self) -> None:
+        # A rebounding ring can lift off the line mid-span; the diameter is
+        # the outer width of the silhouette on the line, not the longest
+        # unbroken contact segment.
+        mask = np.zeros((80, 100), dtype=np.uint8)
+        mask[30:40, 20:80] = 1  # Connected body above the line.
+        mask[40:51, 20:35] = 1  # Left lobe reaching the line.
+        mask[40:51, 65:80] = 1  # Right lobe reaching the line.
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            min_area_px=1,
+            min_touch_pixels=1,
             debug_dir=None,
         )
 

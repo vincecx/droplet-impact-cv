@@ -121,6 +121,33 @@ class SequenceAnalysisTests(unittest.TestCase):
         )
 
 
+class DebugOverlayLifecycleTests(unittest.TestCase):
+    def test_stale_overlays_from_previous_runs_are_removed(self) -> None:
+        with TemporaryDirectory() as temporary_dir:
+            input_dir = Path(temporary_dir)
+            debug_dir = input_dir / "debug_overlays"
+            debug_dir.mkdir()
+            stale_overlay = debug_dir / "000099.png"
+            stale_overlay.write_bytes(b"stale")
+            unrelated_file = debug_dir / "notes.txt"
+            unrelated_file.write_text("keep me")
+            image = np.full((100, 100), 4000, dtype=np.uint16)
+            image[50:] = 2000
+            for frame_number in range(1, 4):
+                tifffile.imwrite(input_dir / f"frame{frame_number:06d}.tif", image)
+
+            config = AnalysisConfig(
+                input_dir=input_dir,
+                output_csv=input_dir / "output.csv",
+                surface_y=50,
+                debug_dir=debug_dir,
+            )
+            analyze_sequence(config)
+
+            self.assertFalse(stale_overlay.exists())
+            self.assertTrue(unrelated_file.exists())
+
+
 class ContourMeasurementTests(unittest.TestCase):
     def test_measurement_never_adds_pixels_outside_detected_contour(self) -> None:
         mask = np.zeros((80, 100), dtype=np.uint8)

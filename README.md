@@ -57,13 +57,13 @@ Configuration precedence is: explicit command-line options, then
 `--fps 8000` on the command line overrides `--fps 4000` in `cv_config.txt`.
 
 Use `--surface-frame` to select a frame containing an impacted droplet, then use
-`--reflection-mode` to choose its calibration and measurement method:
+`--reflection-mode` to choose how the surface line is calibrated from it. The
+calibrated line is the single fixed surface reference for every frame.
 
 - `mirror`: fit the surface through the contact vertices between the droplet and
-  its strong reflection; spreading width is measured on that line.
+  its strong reflection.
 - `none`: fit the surface to the lower contour of the impacted droplet in the
-  selected surface frame; weak reflections are treated as `none`, and width is
-  measured over the narrow apparent-contact band above that line.
+  selected surface frame; weak reflections are treated as `none`.
 - `auto` (default): use `mirror` only when the calibration silhouette provides
   strong reflection evidence; otherwise use `none`.
 
@@ -78,6 +78,21 @@ Surface angles are measured clockwise from horizontal. Use
 (that is, `0.6` degrees counterclockwise). Use `--surface-y` to manually override
 the calibrated surface-line center pixel coordinate.
 
+## Foreground detection
+
+The droplet is not assumed to be dark. A pixel counts as foreground when its
+gray level differs from the background frame in either direction, so a
+transparent droplet that refracts the backlight and appears brighter than a
+dark substrate is still detected.
+
+Detection uses two thresholds. Pixels whose absolute change exceeds
+`--threshold` (default: automatic, at least `--min-foreground-delta`) are
+reliable foreground. Pixels above the weak threshold (default: a quarter of
+the effective strong threshold, override with `--weak-threshold`) are included
+only when they are connected to reliable foreground within a bounded distance.
+This recovers the faint interior of a nearly transparent liquid film while
+rejecting isolated weak artifacts such as diffuse out-of-focus shadows.
+
 ## Outputs
 
 By default, all outputs are grouped under a folder named after the input
@@ -86,9 +101,14 @@ CSV is written to `outputs/example/spreading_diameter.csv` and diagnostic
 overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
 choose a different directory for debug overlays.
 
-In mirror mode the reported spreading diameter is the liquid-contour intersection
-with the fixed surface line. In non-mirror mode it is the projection of the
-apparent contact band immediately above that line.
+The reported spreading diameter is the maximum width of the detected liquid
+silhouette within 3 px above or below the fixed surface line: the distance
+between the outermost points where the silhouette enters that band. Frames
+where the silhouette stays clear of the band report a diameter of `0`.
+
+Debug overlays are written selectively rather than for every frame. Each run
+first deletes any frame-numbered overlay PNGs already in the target directory,
+so its contents always reflect a single run's calibration.
 
 The CSV columns are:
 

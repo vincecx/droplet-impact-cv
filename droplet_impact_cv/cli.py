@@ -135,7 +135,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--threshold",
         type=positive_float,
         default=None,
-        help="Override dark foreground threshold in gray levels.",
+        help="Override foreground change threshold in gray levels.",
+    )
+    parser.add_argument(
+        "--weak-threshold",
+        type=positive_float,
+        default=None,
+        help=(
+            "Weak threshold in gray levels for extending detections across "
+            "faint transparent liquid. Pixels above this value count as "
+            "foreground only when connected to a pixel above --threshold. "
+            "Default: a quarter of the effective threshold."
+        ),
     )
     parser.add_argument(
         "--min-foreground-delta",
@@ -254,6 +265,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         surface_angle_deg=args.surface_angle_deg,
         reflection_mode=args.reflection_mode,
         threshold=args.threshold,
+        weak_threshold=args.weak_threshold,
         min_foreground_delta=args.min_foreground_delta,
         min_area_px=int(args.min_area_px),
         morphology_radius_px=args.morphology_radius_px,

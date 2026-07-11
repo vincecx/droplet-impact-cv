@@ -11,6 +11,19 @@ from .models import SurfaceLine
 DEBUG_MASK_ALPHA = 0.2
 
 
+def clear_debug_overlays(debug_dir: Path) -> None:
+    """Delete frame-numbered overlay PNGs so the directory holds one run only.
+
+    Overlays are written selectively (every N frames plus around impact), so
+    the directory must be cleared first to keep every remaining overlay
+    consistent with the current run's calibration.
+    """
+    if not debug_dir.is_dir():
+        return
+    for path in debug_dir.glob("[0-9][0-9][0-9][0-9][0-9][0-9].png"):
+        path.unlink()
+
+
 def write_debug_overlay(
     path: Path,
     image: np.ndarray,

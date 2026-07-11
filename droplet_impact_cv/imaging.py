@@ -14,9 +14,12 @@ from .models import AnalysisConfig, ComponentMeasurement, SurfaceLine
 
 
 SURFACE_MASK_BELOW_TOLERANCE_PX = 0
+SURFACE_MEASURE_BAND_PX = 3
 FRAME_NUMBER_PATTERN = re.compile(r"(?<!\d)(\d{6})$")
 SUPPORTED_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg")
 MAX_REFLECTION_SYMMETRY_ERROR = 0.1
+DEFAULT_WEAK_THRESHOLD_FRACTION = 0.25
+WEAK_PROPAGATION_MAX_PX = 40
 
 
 def natural_sort_key(path: Path) -> list[int | str]:
@@ -149,6 +152,40 @@ def clean_binary_mask(mask: np.ndarray, structure: np.ndarray) -> np.ndarray:
     return ndi.binary_fill_holes(reconstructed).astype(np.uint8)
 
 
+def hysteresis_change_mask(
+    image: np.ndarray,
+    background: np.ndarray,
+    threshold: float,
+    weak_threshold: float | None,
+    roi: np.ndarray | None = None,
+) -> np.ndarray:
+    """Detect changed pixels with an optional weak-threshold extension.
+
+    Transparent liquid can appear brighter than the local background, for
+    example a glassy lamella refracting the backlight over a dark substrate,
+    so both darkening and brightening count as foreground.  A fully
+    transparent film transmits the backlight almost unchanged, leaving only
+    part of its silhouette above the strong threshold.  Pixels above the weak
+    threshold are kept when they connect to a strong detection, which extends
+    the confident regions across the faint interior without admitting
+    isolated weak artifacts such as diffuse shadows.
+    """
+    change = np.abs(background - image)
+    strong = change >= threshold
+    if roi is not None:
+        strong &= roi
+    if weak_threshold is None or weak_threshold >= threshold:
+        return strong
+    weak = change >= weak_threshold
+    if roi is not None:
+        weak &= roi
+    # Bound the growth distance so a diffuse out-of-focus artifact that
+    # touches the droplet cannot pull the whole artifact into the mask.
+    # Transparent-film interiors sit well within this distance of a strong
+    # rim or highlight detection.
+    return ndi.binary_dilation(strong, mask=weak, iterations=WEAK_PROPAGATION_MAX_PX)
+
+
 def foreground_mask(
     image: np.ndarray,
     background: np.ndarray,
@@ -156,15 +193,13 @@ def foreground_mask(
     threshold: float,
     config: AnalysisConfig,
     structure: np.ndarray,
+    weak_threshold: float | None = None,
 ) -> np.ndarray:
     yy, xx = np.indices(image.shape)
     distance_from_surface = yy - surface_line.y_at(xx, image.shape[1])
     roi = distance_from_surface <= config.measure_below_surface_px
-    mask = np.zeros(image.shape, dtype=np.uint8)
-    dark_change = ((background - image) >= threshold) & roi
-    mask[dark_change] = 1
-
-    return clean_binary_mask(mask, structure)
+    changed = hysteresis_change_mask(image, background, threshold, weak_threshold, roi)
+    return clean_binary_mask(changed.astype(np.uint8), structure)
 
 
 def full_foreground_mask(
@@ -172,9 +207,10 @@ def full_foreground_mask(
     background: np.ndarray,
     threshold: float,
     structure: np.ndarray,
+    weak_threshold: float | None = None,
 ) -> np.ndarray:
-    dark_change = (background - image) >= threshold
-    return clean_binary_mask(dark_change, structure)
+    changed = hysteresis_change_mask(image, background, threshold, weak_threshold)
+    return clean_binary_mask(changed, structure)
 
 
 def largest_component(mask: np.ndarray, min_area_px: int) -> np.ndarray:
@@ -294,35 +330,25 @@ def spreading_profile_on_surface(
     return profile
 
 
-def spreading_profile_near_surface(
+def surface_intersection_bounds(
     component: np.ndarray,
     surface_line: SurfaceLine,
-    above_px: int,
-) -> np.ndarray:
-    """Project the apparent contact region onto the surface x axis.
+    band_px: int = SURFACE_MEASURE_BAND_PX,
+) -> tuple[int, int] | None:
+    """Outermost x bounds where the silhouette meets the surface-line band.
 
-    On a non-reflective wall the visible liquid contour commonly stops a few
-    pixels above the substrate edge because of glare. Projecting the narrow
-    region immediately above that edge retains the physical contact span.
+    The band spans ``band_px`` above and below the line, absorbing the
+    pixel-level wobble of a blurred contact zone without measuring liquid
+    that is clearly detached from the surface.
     """
     yy, xx = np.indices(component.shape)
     distance = yy - surface_line.y_at(xx, component.shape[1])
-    contact_band = (distance >= -above_px) & (distance <= 0)
-    return np.any(component & contact_band, axis=0)
-
-
-def measurement_profile(
-    component: np.ndarray,
-    surface_line: SurfaceLine,
-    config: AnalysisConfig,
-) -> np.ndarray:
-    if config.reflection_mode == "none":
-        return spreading_profile_near_surface(
-            component,
-            surface_line,
-            config.touch_above_surface_px,
-        )
-    return spreading_profile_on_surface(component, surface_line)
+    band = np.abs(distance) <= band_px
+    profile = np.any(component & band, axis=0)
+    xs = np.flatnonzero(profile)
+    if xs.size == 0:
+        return None
+    return int(xs[0]), int(xs[-1])
 
 
 def fill_droplet_interior(
@@ -361,14 +387,19 @@ def component_measurement(
 ) -> ComponentMeasurement:
     component, area = select_liquid_component(mask, surface_line, config)
     if area == 0:
-        return ComponentMeasurement(math.nan, 0, None, component)
+        return ComponentMeasurement(0.0, 0, None, component)
 
     # Seal apparent holes that open through a few pixels near the substrate,
     # then treat the selected droplet's enclosed bright regions as liquid.
     component = fill_droplet_interior(component, surface_line)
 
-    # Keep the outer measured contour tied to foreground pixels. Polygon
-    # approximation can cut across concave edges or extend beyond the liquid.
+    # The diameter is the silhouette's maximum width within the measurement
+    # band around the fixed surface line; a droplet that stays clear of the
+    # band measures zero. Measured before the clip below so that the part of
+    # the band under the line participates.
+    bounds = surface_intersection_bounds(component, surface_line)
+
+    # The reported mask and area cover only the liquid on and above the line.
     component &= surface_band_mask(
         component.shape,
         surface_line,
@@ -378,10 +409,8 @@ def component_measurement(
     if clipped_component.any():
         component = clipped_component
     area = int(component.sum())
-    profile = measurement_profile(component, surface_line, config)
-    bounds = longest_true_run(profile)
     if bounds is None:
-        return ComponentMeasurement(math.nan, area, None, component)
+        return ComponentMeasurement(0.0, area, None, component)
 
     x_min, x_max = bounds
     y_min = int(round(surface_line.y_at(x_min, component.shape[1])))
@@ -390,12 +419,11 @@ def component_measurement(
     return ComponentMeasurement(diameter_px, area, (x_min, y_min, x_max, y_max), component)
 
 
-def touches_surface(mask: np.ndarray, surface_line: SurfaceLine, config: AnalysisConfig) -> bool:
-    profile = measurement_profile(mask, surface_line, config)
-    bounds = longest_true_run(profile)
-    if bounds is None:
+def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -> bool:
+    if measurement.bbox is None:
         return False
-    return (bounds[1] - bounds[0] + 1) >= config.min_touch_pixels
+    x_min, _y_min, x_max, _y_max = measurement.bbox
+    return (x_max - x_min + 1) >= config.min_touch_pixels
 
 
 def select_calibration_component(
@@ -639,6 +667,7 @@ def calibration_frame_mask(
     frame_number: int,
     threshold: float,
     structure: np.ndarray,
+    weak_threshold: float | None = None,
 ) -> np.ndarray:
     matching_file = next(
         (path for path in files if frame_number_from_filename(path) == frame_number),
@@ -646,7 +675,13 @@ def calibration_frame_mask(
     )
     if matching_file is None:
         raise ValueError(f"--surface-frame {frame_number} does not exist in the input sequence")
-    return full_foreground_mask(read_image(matching_file), background, threshold, structure)
+    return full_foreground_mask(
+        read_image(matching_file),
+        background,
+        threshold,
+        structure,
+        weak_threshold,
+    )
 
 
 def detect_reflection_mode_from_frame(
@@ -657,6 +692,7 @@ def detect_reflection_mode_from_frame(
     coarse_surface_y: int,
     config: AnalysisConfig,
     structure: np.ndarray,
+    weak_threshold: float | None = None,
 ) -> str:
     mask = calibration_frame_mask(
         files,
@@ -664,6 +700,7 @@ def detect_reflection_mode_from_frame(
         frame_number,
         threshold,
         structure,
+        weak_threshold,
     )
     return detect_reflection_mode(mask, coarse_surface_y, config)
 
@@ -764,6 +801,7 @@ def estimate_surface_line_from_nonreflection_frame(
     config: AnalysisConfig,
     structure: np.ndarray,
     angle_override_deg: float | None = None,
+    weak_threshold: float | None = None,
 ) -> SurfaceLine:
     """Fit the surface to the impacted droplet's lower contour."""
     mask = calibration_frame_mask(
@@ -772,6 +810,7 @@ def estimate_surface_line_from_nonreflection_frame(
         frame_number,
         threshold,
         structure,
+        weak_threshold,
     )
     component = select_nonreflection_calibration_component(mask, config)
     if component is None:
@@ -791,6 +830,7 @@ def estimate_surface_line_from_symmetry_frame(
     config: AnalysisConfig,
     structure: np.ndarray,
     angle_override_deg: float | None = None,
+    weak_threshold: float | None = None,
 ) -> SurfaceLine:
     mask = calibration_frame_mask(
         files,
@@ -798,6 +838,7 @@ def estimate_surface_line_from_symmetry_frame(
         frame_number,
         threshold,
         structure,
+        weak_threshold,
     )
     selected = select_calibration_component(mask, coarse_surface_y, config)
     if selected is None:
