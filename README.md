@@ -1,8 +1,9 @@
 # droplet-impact-cv
 
-Automated side-view image analysis for droplet impact sequences. The CLI reads
-grayscale TIFF frames or 8-bit JPEG exports, detects the substrate surface and
-impact frame, then exports droplet spreading diameter as a function of time.
+Automated image analysis for side-view high-speed droplet impact sequences. 
+The CLI reads grayscale TIFF or 8-bit JPEG sequences, detects the substrate
+surface and impact frame, then exports droplet spreading diameter as a function
+of time.
 
 Each image filename must end with a six-digit frame number immediately before the
 extension. For example, `capture_000005.tif` is reported as frame 5 even when it
@@ -17,18 +18,18 @@ background for the full sequence.
 The project uses `uv` for dependency and environment management.
 
 ```bash
-uv run droplet-impact-cv sourcedata/example
+uv sync
+uv run droplet-impact-cv path/to/image_sequences
 ```
 
 An experiment-specific command typically looks like this:
 
 ```bash
-uv run droplet-impact-cv path/to/tiff_frames \
+uv run droplet-impact-cv path/to/image_sequences \
   --fps 8000 \
   --pixel-size-mm 0.00711883341 \
   --calibration-frame 61 \
-  --reflection-mode auto \
-  --debug-interval 1
+  --reflection-mode auto
 ```
 
 ### Runtime logic
@@ -48,20 +49,18 @@ uv run droplet-impact-cv path/to/tiff_frames \
 6. Detect impact when that span reaches `--min-impact-width-px`, convert pixels
    to millimetres and frames to time, then write the CSV and selected overlays.
 
-The detected foreground therefore represents image change, not specifically a
-dark object. Transparent liquid that brightens a dark substrate can still be
-part of the droplet silhouette.
+The detected foreground therefore represents image change. Transparent liquid 
+that brightens a dark substrate can still be part of the droplet silhouette.
 
 Surface calibration uses `mirror` to fit the contact vertices between a droplet
 and its strong reflection, or `none` to fit the impacted droplet's lower
 contour. The default `auto` mode conservatively selects `mirror` only when the
-silhouette provides strong reflection evidence. Set the mode explicitly for
-transparent droplets, weak reflections, or backgrounds with multiple
-horizontal edges.
+silhouette provides strong reflection evidence. Setting the mode explicitly is 
+recommended.
 
 Surface angles are clockwise from horizontal. Without a calibration frame or
 explicit `--surface-angle-deg`, the fallback is `-0.6` degrees. A manual
-`--surface-y-px` overrides the calibrated surface-line centre.
+`--surface-y-px` overrides the calibrated surface-line center.
 
 ### CLI parameter summary
 
@@ -69,6 +68,7 @@ Options can also be placed in `<input-folder>/cv_config.txt`, one or more per
 line. Blank lines and `#` comments are allowed. Precedence is: explicit CLI
 options, `cv_config.txt`, then program defaults.
 
+Example of cv_config.txt:
 ```text
 --fps 4000
 --pixel-size-mm 0.01682736321
@@ -91,7 +91,7 @@ settings most useful when tuning the detected droplet contour.
 | `--pixel-size-mm` | `0.00711883341` | Physical length represented by one pixel. |
 | `--calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
-| `--surface-y-px` | automatic | Manually override the surface-line centre y coordinate. |
+| `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
 | `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
 | `--strong-threshold` | automatic | Strong absolute background-change threshold. |
 | `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
@@ -121,7 +121,7 @@ interior. If noise forms separate components, tune `--min-droplet-area-px` and
 | `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
 | `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
 | `--debug-dir` | `outputs/<input-folder>/debug_overlays` | Diagnostic overlay directory. |
-| `--debug-interval` | `1` | Write one periodic overlay every N frames. |
+| `--debug-interval` | `1` | Write one debug overlay every N frames. |
 
 ## Outputs
 
@@ -138,9 +138,10 @@ silhouette enters that band. Frames where the silhouette stays clear of the
 band report a diameter of `0`. A frame is marked as the impact frame once this
 width reaches `--min-impact-width-px` (default: 30).
 
-Debug overlays are written selectively rather than for every frame. Each run
-first deletes any frame-numbered overlay PNGs already in the target directory,
-so its contents always reflect a single run's calibration.
+By default, debug overlays are generated for every frame (use `--debug-interval`
+to change). Note that each run first deletes any frame-numbered overlay PNGs
+already in the target directory, so its contents always reflect a single run's
+calibration.
 
 The CSV columns are:
 
@@ -172,9 +173,8 @@ pre-impact rows are omitted. Use `--include-pre-impact` to keep all frames, or
 
 ## Development
 
-Synchronize the environment and run the test suite with:
+Run the test suite with:
 
 ```bash
-uv sync
 uv run python -m unittest discover -v
 ```
