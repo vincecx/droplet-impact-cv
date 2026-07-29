@@ -35,6 +35,26 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(put_text.call_args.args[3], cv2.FONT_HERSHEY_DUPLEX)
         self.assertEqual(put_text.call_args.args[7], cv2.LINE_AA)
 
+    def test_hydrophobic_overlay_draws_contact_and_rim_measurements(self) -> None:
+        image = np.zeros((80, 100), dtype=np.float32)
+        mask = np.zeros_like(image, dtype=bool)
+        with TemporaryDirectory() as temporary_dir:
+            output_path = Path(temporary_dir) / "overlay.png"
+            write_debug_overlay(
+                output_path,
+                image,
+                mask,
+                SurfaceLine(50.0, angle_deg=0.0),
+                (20, 50, 80, 50),
+                1,
+                1.0,
+                rim_bbox=(10, 30, 90, 30),
+            )
+            overlay = cv2.imread(str(output_path))
+
+        self.assertTrue(np.array_equal(overlay[50, 20], np.array([0, 255, 0])))
+        self.assertTrue(np.array_equal(overlay[30, 40], np.array([255, 0, 255])))
+
     def test_csv_columns_and_analysis_parameters(self) -> None:
         measurement = FrameMeasurement(
             frame_number=61,

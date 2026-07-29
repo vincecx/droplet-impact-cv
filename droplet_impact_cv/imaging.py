@@ -369,6 +369,57 @@ def surface_intersection_bounds(
     return int(xs[0]), int(xs[-1])
 
 
+def rim_to_rim_segment(
+    component: np.ndarray,
+    surface_line: SurfaceLine,
+) -> tuple[float, tuple[int, int, int, int]] | None:
+    """Find the longest droplet chord parallel to the surface line.
+
+    Each foreground pixel is projected onto axes parallel and perpendicular to
+    the surface. Pixels within the same one-pixel perpendicular band form one
+    candidate chord. The longest candidate defines the hydrophobic
+    rim-to-rim diameter and its displayed measurement line.
+    """
+    ys, xs = np.nonzero(component)
+    if xs.size == 0:
+        return None
+
+    slope = surface_line.slope
+    length_scale = math.sqrt(1.0 + slope**2)
+    parallel_x = 1.0 / length_scale
+    parallel_y = slope / length_scale
+    normal_x = -slope / length_scale
+    normal_y = 1.0 / length_scale
+    parallel = xs * parallel_x + ys * parallel_y
+    normal = xs * normal_x + ys * normal_y
+    normal_bands = np.rint(normal).astype(int)
+
+    best_length = -1.0
+    best_parallel_min = 0.0
+    best_parallel_max = 0.0
+    best_normal = 0.0
+    for normal_band in np.unique(normal_bands):
+        in_band = normal_bands == normal_band
+        band_parallel = parallel[in_band]
+        candidate_min = float(band_parallel.min())
+        candidate_max = float(band_parallel.max())
+        candidate_length = candidate_max - candidate_min + 1.0
+        if candidate_length > best_length:
+            best_length = candidate_length
+            best_parallel_min = candidate_min
+            best_parallel_max = candidate_max
+            best_normal = float(normal[in_band].mean())
+
+    def point_at(parallel_position: float) -> tuple[int, int]:
+        x = parallel_position * parallel_x + best_normal * normal_x
+        y = parallel_position * parallel_y + best_normal * normal_y
+        return int(round(x)), int(round(y))
+
+    x_min, y_min = point_at(best_parallel_min)
+    x_max, y_max = point_at(best_parallel_max)
+    return best_length, (x_min, y_min, x_max, y_max)
+
+
 def fill_droplet_interior(
     component: np.ndarray,
     surface_line: SurfaceLine,
@@ -411,11 +462,26 @@ def component_measurement(
     # then treat the selected droplet's enclosed bright regions as liquid.
     component = fill_droplet_interior(component, surface_line)
 
-    # The diameter is the silhouette's maximum width within the measurement
-    # band around the fixed surface line; a droplet that stays clear of the
-    # band measures zero. Measured before the clip below so that the part of
-    # the band under the line participates.
-    bounds = surface_intersection_bounds(component, surface_line, config.surface_band_px)
+    # Hydrophobic droplets are measured rim-to-rim. Otherwise, the diameter is
+    # the silhouette width where it meets the fixed surface-line band. Both
+    # measurements are taken before clipping, so pixels just below the line
+    # still participate in the contact-line measurement.
+    contact_bounds = surface_intersection_bounds(
+        component, surface_line, config.surface_band_px
+    )
+    contact_bbox = None
+    if contact_bounds is not None:
+        contact_x_min, contact_x_max = contact_bounds
+        contact_bbox = (
+            contact_x_min,
+            int(round(surface_line.y_at(contact_x_min, component.shape[1]))),
+            contact_x_max,
+            int(round(surface_line.y_at(contact_x_max, component.shape[1]))),
+        )
+    if config.hydrophobic:
+        rim_measurement = rim_to_rim_segment(component, surface_line)
+    else:
+        rim_measurement = None
 
     # The reported mask and area cover only the liquid on and above the line.
     component &= surface_band_mask(
@@ -427,19 +493,38 @@ def component_measurement(
     if clipped_component.any():
         component = clipped_component
     area = int(component.sum())
-    if bounds is None:
-        return ComponentMeasurement(0.0, area, None, component)
+    if config.hydrophobic:
+        if rim_measurement is None:
+            return ComponentMeasurement(0.0, area, None, component)
+        diameter_px, rim_bbox = rim_measurement
+        return ComponentMeasurement(
+            diameter_px,
+            area,
+            rim_bbox,
+            component,
+            contact_bbox=contact_bbox,
+            rim_bbox=rim_bbox,
+        )
 
-    x_min, x_max = bounds
-    y_min = int(round(surface_line.y_at(x_min, component.shape[1])))
-    y_max = int(round(surface_line.y_at(x_max, component.shape[1])))
+    if contact_bounds is None:
+        return ComponentMeasurement(0.0, area, None, component)
+    assert contact_bbox is not None
+    x_min, y_min, x_max, y_max = contact_bbox
     diameter_px = float((x_max - x_min + 1) * math.sqrt(1.0 + surface_line.slope**2))
-    return ComponentMeasurement(diameter_px, area, (x_min, y_min, x_max, y_max), component)
+    return ComponentMeasurement(
+        diameter_px,
+        area,
+        (x_min, y_min, x_max, y_max),
+        component,
+        contact_bbox=contact_bbox,
+    )
 
 
 def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -> bool:
     if measurement.bbox is None:
         return False
+    if config.hydrophobic:
+        return measurement.diameter_px >= config.min_impact_width_px
     x_min, _y_min, x_max, _y_max = measurement.bbox
     return (x_max - x_min + 1) >= config.min_impact_width_px
 

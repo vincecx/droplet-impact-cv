@@ -44,6 +44,13 @@ def positive_int(value: str) -> int:
     return parsed
 
 
+def zero_or_one(value: str) -> int:
+    parsed = int(value)
+    if parsed not in (0, 1):
+        raise argparse.ArgumentTypeError("value must be 0 or 1")
+    return parsed
+
+
 def unit_fraction(value: str) -> float:
     parsed = float(value)
     if not 0.0 < parsed <= 1.0:
@@ -257,12 +264,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--HO",
+        dest="hydrophobic",
+        type=zero_or_one,
+        default=0,
+        metavar="{0,1}",
+        help=(
+            "Use rim-to-rim width for hydrophobic surfaces (1), instead of "
+            "the surface contact-line width (0). Default: 0"
+        ),
+    )
+    parser.add_argument(
         "--min-impact-width-px",
         type=nonnegative_int,
         default=30,
         help=(
-            "Minimum spreading width in the surface band for a frame to be "
-            "marked as the impact frame. Default: 30"
+            "Minimum selected spreading width for a frame to be marked as "
+            "the impact frame. Default: 30"
         ),
     )
     parser.add_argument(
@@ -343,6 +361,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         min_area_px=int(args.min_area_px),
         morphology_radius_px=args.morphology_radius_px,
         surface_band_px=args.surface_band_px,
+        hydrophobic=bool(args.hydrophobic),
         measure_below_surface_px=args.measure_below_surface_px,
         touch_above_surface_px=args.touch_above_surface_px,
         touch_below_surface_px=args.touch_below_surface_px,

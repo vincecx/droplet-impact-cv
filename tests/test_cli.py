@@ -159,6 +159,21 @@ class CliConfigTests(unittest.TestCase):
 
         self.assertEqual(config.debug_every, 1)
 
+    def test_hydrophobic_option_can_be_loaded_from_config_or_overridden_by_cli(self) -> None:
+        with TemporaryDirectory() as temporary_dir:
+            input_dir = Path(temporary_dir)
+            (input_dir / "cv_config.txt").write_text("--HO 1\n", encoding="utf-8")
+
+            configured = config_from_args(parse_args([str(input_dir)]))
+            overridden = config_from_args(parse_args([str(input_dir), "--HO", "0"]))
+
+        self.assertTrue(configured.hydrophobic)
+        self.assertFalse(overridden.hydrophobic)
+
+    def test_hydrophobic_option_must_be_zero_or_one(self) -> None:
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            build_parser().parse_args(["--HO", "2"])
+
     def test_renamed_parameters_are_rejected(self) -> None:
         parser = build_parser()
         old_options = (

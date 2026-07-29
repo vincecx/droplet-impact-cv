@@ -186,6 +186,52 @@ class ForegroundMaskTests(unittest.TestCase):
 
 
 class ComponentMeasurementTests(unittest.TestCase):
+    def test_hydrophobic_measurement_uses_rim_to_rim_width(self) -> None:
+        mask = np.zeros((100, 140), dtype=np.uint8)
+        # The footprint at the surface is 40 px, while the lifted rim span is
+        # 80 px. A hydrophobic measurement must use the latter.
+        mask[30:45, 30:110] = 1
+        mask[45:51, 50:90] = 1
+        surface_line = SurfaceLine(50.0, angle_deg=0.0)
+        contact_config = AnalysisConfig(
+            input_dir=Path("input"), output_csv=Path("output.csv"),
+            min_area_px=1, min_touch_pixels=1, debug_dir=None,
+        )
+        hydrophobic_config = AnalysisConfig(
+            input_dir=Path("input"), output_csv=Path("output.csv"),
+            min_area_px=1, min_touch_pixels=1, hydrophobic=True, debug_dir=None,
+        )
+
+        contact_measurement = component_measurement(mask, surface_line, contact_config)
+        rim_measurement = component_measurement(mask, surface_line, hydrophobic_config)
+
+        self.assertEqual(contact_measurement.diameter_px, 40.0)
+        self.assertEqual(rim_measurement.diameter_px, 80.0)
+        self.assertEqual(rim_measurement.contact_bbox, (50, 50, 89, 50))
+        self.assertEqual(rim_measurement.rim_bbox, (30, 30, 109, 30))
+
+    def test_hydrophobic_rim_measurement_is_parallel_to_surface(self) -> None:
+        mask = np.zeros((160, 180), dtype=np.uint8)
+        # A 0.5-slope, 80-px-wide parallelogram: the longest diameter must
+        # follow the surface direction, rather than the image x axis.
+        cv2.fillConvexPoly(
+            mask,
+            np.array([[30, 40], [110, 80], [100, 100], [20, 60]], dtype=np.int32),
+            1,
+        )
+        surface_line = SurfaceLine(80.0, angle_deg=np.degrees(np.arctan(0.5)))
+        config = AnalysisConfig(
+            input_dir=Path("input"), output_csv=Path("output.csv"),
+            min_area_px=1, min_touch_pixels=1, hydrophobic=True, debug_dir=None,
+        )
+
+        measurement = component_measurement(mask, surface_line, config)
+
+        assert measurement.rim_bbox is not None
+        x0, y0, x1, y1 = measurement.rim_bbox
+        self.assertAlmostEqual(y1 - y0, 0.5 * (x1 - x0), delta=1.0)
+        self.assertGreater(measurement.diameter_px, 88.0)
+
     def test_overlay_is_clipped_at_surface_without_changing_contact_width(self) -> None:
         mask = np.zeros((80, 100), dtype=np.uint8)
         mask[30:60, 20:80] = 1

@@ -9,6 +9,8 @@ from .models import SurfaceLine
 
 
 DEBUG_MASK_ALPHA = 0.2
+CONTACT_LINE_COLOR = (0, 255, 0)
+RIM_TO_RIM_COLOR = (255, 0, 255)
 
 
 def clear_debug_overlays(debug_dir: Path) -> None:
@@ -32,6 +34,7 @@ def write_debug_overlay(
     bbox: tuple[int, int, int, int] | None,
     frame_number: int,
     diameter_mm: float,
+    rim_bbox: tuple[int, int, int, int] | None = None,
 ) -> None:
     lo, hi = np.percentile(image, [0.5, 99.5])
     gray = np.clip((image - lo) / max(1.0, hi - lo) * 255.0, 0, 255).astype(np.uint8)
@@ -47,7 +50,20 @@ def write_debug_overlay(
     cv2.line(overlay, surface_start, surface_end, (0, 255, 255), 1)
     if bbox is not None:
         x0, y0, x1, y1 = bbox
-        cv2.line(overlay, (x0, y0), (x1, y1), (0, 255, 0), 2)
+        cv2.line(overlay, (x0, y0), (x1, y1), CONTACT_LINE_COLOR, 2)
+    if rim_bbox is not None:
+        x0, y0, x1, y1 = rim_bbox
+        cv2.line(overlay, (x0, y0), (x1, y1), RIM_TO_RIM_COLOR, 2)
+        cv2.putText(
+            overlay,
+            f"rim-to-rim={diameter_mm:.4f} mm",
+            (12, 54),
+            cv2.FONT_HERSHEY_DUPLEX,
+            0.55,
+            RIM_TO_RIM_COLOR,
+            1,
+            cv2.LINE_AA,
+        )
     text = f"frame={frame_number} diameter_mm={diameter_mm:.4f}"
     cv2.putText(
         overlay,
@@ -55,7 +71,7 @@ def write_debug_overlay(
         (12, 28),
         cv2.FONT_HERSHEY_DUPLEX,
         0.7,
-        (0, 255, 0),
+        CONTACT_LINE_COLOR,
         1,
         cv2.LINE_AA,
     )

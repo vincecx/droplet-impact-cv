@@ -200,9 +200,14 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 image,
                 measurement.mask,
                 surface_line,
-                measurement.bbox,
+                (
+                    measurement.contact_bbox
+                    if effective_config.hydrophobic
+                    else measurement.bbox
+                ),
                 frame_number,
                 diameter_mm,
+                rim_bbox=measurement.rim_bbox,
             )
 
     measurements: list[FrameMeasurement] = []

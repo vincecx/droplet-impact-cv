@@ -38,6 +38,7 @@ class AnalysisConfig:
     surface_search_start_px: int = 50
     surface_drop_delta: float = 100.0
     surface_band_px: int = DEFAULT_SURFACE_BAND_PX
+    hydrophobic: bool = False
     measure_below_surface_px: int = 220
     touch_above_surface_px: int = 20
     touch_below_surface_px: int = 170
@@ -72,6 +73,8 @@ class ComponentMeasurement:
     area_px: int
     bbox: tuple[int, int, int, int] | None
     mask: np.ndarray
+    contact_bbox: tuple[int, int, int, int] | None = None
+    rim_bbox: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)

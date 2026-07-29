@@ -101,6 +101,7 @@ settings most useful when tuning the detected droplet contour.
 | `--min-droplet-area-px` | `250` | Reject connected components smaller than this pixel count. |
 | `--morphology-radius-px` | `3` | Radius used to close/fill the mask and remove small artifacts. |
 | `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
+| `--HO {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
 
 Threshold tuning usually starts with `--strong-threshold`. For a faint
 transparent interior, lower `--weak-threshold-ratio` or set `--weak-threshold`
@@ -131,11 +132,13 @@ CSV is written to `outputs/example/spreading_diameter.csv` and diagnostic
 overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
 choose a different directory for debug overlays.
 
-The reported spreading diameter is the maximum width of the detected liquid
-silhouette within `--surface-band-px` pixels above or below the fixed surface
-line (default: 3): the distance between the outermost points where the
-silhouette enters that band. Frames where the silhouette stays clear of the
-band report a diameter of `0`. A frame is marked as the impact frame once this
+By default, the reported spreading diameter is the maximum width of the
+detected liquid silhouette within `--surface-band-px` pixels above or below the
+fixed surface line (default: 3): the distance between the outermost points
+where the silhouette enters that band. Frames where the silhouette stays clear
+of the band report a diameter of `0`. With `--HO 1`, it is instead the
+rim-to-rim width of the entire detected droplet silhouette, so lifted droplets
+remain measurable. A frame is marked as the impact frame once the selected
 width reaches `--min-impact-width-px` (default: 30).
 
 By default, debug overlays are generated for every frame (use `--debug-interval`
