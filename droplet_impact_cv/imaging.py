@@ -20,6 +20,7 @@ from .models import (
 
 
 SURFACE_MASK_BELOW_TOLERANCE_PX = 0
+DEFAULT_CALIBRATION_EDGE_GAP_PX = 20
 FRAME_NUMBER_PATTERN = re.compile(r"(?<!\d)(\d{6})$")
 SUPPORTED_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg")
 MAX_REFLECTION_SYMMETRY_ERROR = 0.1
@@ -637,12 +638,11 @@ def component_measurement(
 
 
 def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -> bool:
-    if measurement.bbox is None:
-        return False
-    if config.hydrophobic:
-        return measurement.spreading_diameter_px >= config.min_impact_width_px
-    x_min, _y_min, x_max, _y_max = measurement.bbox
-    return (x_max - x_min + 1) >= config.min_impact_width_px
+    """Return whether the contact-line diameter marks the start of impact."""
+    return (
+        measurement.contact_line_diameter_px is not None
+        and measurement.contact_line_diameter_px >= config.min_impact_width_px
+    )
 
 
 def select_calibration_component(
@@ -749,7 +749,7 @@ def select_symmetric_calibration_component(
         | None
     ) = None
     max_edge_gap = max(
-        config.touch_above_surface_px,
+        DEFAULT_CALIBRATION_EDGE_GAP_PX,
         4 * max(1, config.morphology_radius_px),
     )
     min_vertical_span = 2 * max(2, config.morphology_radius_px) + 1

@@ -46,8 +46,9 @@ uv run droplet-impact-cv path/to/image_sequences \
    recovers faint, transparent liquid without admitting isolated weak artifacts.
 5. Clean the foreground mask, select the gas-side droplet component nearest the
    surface, fill its enclosed interior, and measure the surface-contact span.
-6. Detect impact when that span reaches `--min-impact-width-px`, convert pixels
-   to millimetres and frames to time, then write the CSV and selected overlays.
+6. Detect impact when the contact-line diameter reaches
+   `--min-impact-width-px`, convert pixels to millimetres and frames to time,
+   then write the CSV and selected overlays.
 7. Before impact, define the reference drop size at the first frame where the
    surface-normal clearance of the lower silhouette reaches one half of its
    equivalent diameter.
@@ -118,10 +119,8 @@ interior. If noise forms separate components, tune `--min-droplet-area-px` and
 | --- | --- | --- |
 | `-o`, `--output-csv` | `outputs/<input-folder>/spreading_diameter.csv` | CSV output path. |
 | `--foreground-depth-px` | `220` | Foreground ROI depth below the surface. |
-| `--contact-above-px` | `20` | Legacy compatibility option; no longer limits airborne-drop selection. |
-| `--contact-below-px` | `170` | Legacy compatibility option; no longer limits airborne-drop selection. |
 | `--min-contact-pixels` | `30` | Minimum gas-side foreground pixels for the selected droplet. |
-| `--min-impact-width-px` | `30` | Width that marks the first impact frame. |
+| `--min-impact-width-px` | `30` | Contact-line diameter that marks the first impact frame. |
 | `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
 | `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
 | `--debug-dir` | `outputs/<input-folder>/debug_overlays` | Diagnostic overlay directory. |
@@ -141,8 +140,8 @@ fixed surface line (default: 3): the distance between the outermost points
 where the silhouette enters that band. Frames where the silhouette stays clear
 of the band report a spreading diameter of `0`. With `--HO 1`, it is instead the
 rim-to-rim width of the entire detected droplet silhouette, so lifted droplets
-remain measurable. A frame is marked as the impact frame once the selected
-width reaches `--min-impact-width-px` (default: 30).
+remain measurable. Regardless of `--HO`, a frame is marked as the impact frame
+once its contact-line diameter reaches `--min-impact-width-px` (default: 30).
 
 ### Reference equivalent diameter
 

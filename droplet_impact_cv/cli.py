@@ -237,22 +237,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Foreground ROI depth below the surface line.",
     )
     parser.add_argument(
-        "--contact-above-px",
-        dest="touch_above_surface_px",
-        type=nonnegative_int,
-        metavar="DISTANCE",
-        default=20,
-        help="Impact detection window above surface.",
-    )
-    parser.add_argument(
-        "--contact-below-px",
-        dest="touch_below_surface_px",
-        type=nonnegative_int,
-        metavar="DISTANCE",
-        default=170,
-        help="Impact detection window below surface.",
-    )
-    parser.add_argument(
         "--min-contact-pixels",
         dest="min_touch_pixels",
         type=nonnegative_int,
@@ -363,8 +347,6 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         surface_band_px=args.surface_band_px,
         hydrophobic=bool(args.hydrophobic),
         measure_below_surface_px=args.measure_below_surface_px,
-        touch_above_surface_px=args.touch_above_surface_px,
-        touch_below_surface_px=args.touch_below_surface_px,
         min_touch_pixels=args.min_touch_pixels,
         min_impact_width_px=args.min_impact_width_px,
         include_pre_impact=args.include_pre_impact,

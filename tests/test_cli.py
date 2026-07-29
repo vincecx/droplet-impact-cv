@@ -129,10 +129,6 @@ class CliConfigTests(unittest.TestCase):
                     "300",
                     "--foreground-depth-px",
                     "200",
-                    "--contact-above-px",
-                    "18",
-                    "--contact-below-px",
-                    "160",
                     "--min-contact-pixels",
                     "25",
                     "--debug-interval",
@@ -149,8 +145,6 @@ class CliConfigTests(unittest.TestCase):
         self.assertEqual(config.min_foreground_delta, 1200.0)
         self.assertEqual(config.min_area_px, 300)
         self.assertEqual(config.measure_below_surface_px, 200)
-        self.assertEqual(config.touch_above_surface_px, 18)
-        self.assertEqual(config.touch_below_surface_px, 160)
         self.assertEqual(config.min_touch_pixels, 25)
         self.assertEqual(config.debug_every, 5)
 
@@ -193,6 +187,13 @@ class CliConfigTests(unittest.TestCase):
         )
 
         for option in old_options:
+            with self.subTest(option=option), redirect_stderr(StringIO()):
+                with self.assertRaises(SystemExit):
+                    parser.parse_args([option, "1"])
+
+    def test_deprecated_contact_window_parameters_are_rejected(self) -> None:
+        parser = build_parser()
+        for option in ("--contact-above-px", "--contact-below-px"):
             with self.subTest(option=option), redirect_stderr(StringIO()):
                 with self.assertRaises(SystemExit):
                     parser.parse_args([option, "1"])

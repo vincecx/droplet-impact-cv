@@ -40,8 +40,6 @@ class AnalysisConfig:
     surface_band_px: int = DEFAULT_SURFACE_BAND_PX
     hydrophobic: bool = False
     measure_below_surface_px: int = 220
-    touch_above_surface_px: int = 20
-    touch_below_surface_px: int = 170
     min_touch_pixels: int = 30
     min_impact_width_px: int = 30
     include_pre_impact: bool = False

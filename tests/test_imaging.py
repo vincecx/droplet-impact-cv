@@ -20,6 +20,7 @@ from droplet_impact_cv.imaging import (
     read_image,
     select_calibration_component,
     select_symmetric_calibration_component,
+    touches_surface,
 )
 from droplet_impact_cv.models import (
     DEFAULT_MIN_FOREGROUND_DELTA,
@@ -186,6 +187,27 @@ class ForegroundMaskTests(unittest.TestCase):
 
 
 class ComponentMeasurementTests(unittest.TestCase):
+    def test_impact_detection_always_uses_contact_line_diameter(self) -> None:
+        mask = np.zeros((100, 140), dtype=np.uint8)
+        # The lifted rim is deliberately wider than the contact line.
+        mask[30:45, 30:110] = 1
+        mask[45:51, 50:90] = 1
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            min_area_px=1,
+            min_touch_pixels=1,
+            min_impact_width_px=60,
+            hydrophobic=True,
+            debug_dir=None,
+        )
+
+        measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
+
+        self.assertEqual(measurement.contact_line_diameter_px, 40.0)
+        self.assertEqual(measurement.rim_to_rim_diameter_px, 80.0)
+        self.assertFalse(touches_surface(measurement, config))
+
     def test_hydrophobic_measurement_uses_rim_to_rim_width(self) -> None:
         mask = np.zeros((100, 140), dtype=np.uint8)
         # The footprint at the surface is 40 px, while the lifted rim span is
@@ -297,7 +319,6 @@ class ComponentMeasurementTests(unittest.TestCase):
             reflection_mode="none",
             min_area_px=1,
             min_touch_pixels=1,
-            touch_above_surface_px=10,
             debug_dir=None,
         )
 
@@ -316,7 +337,6 @@ class ComponentMeasurementTests(unittest.TestCase):
             reflection_mode="none",
             min_area_px=1,
             min_touch_pixels=1,
-            touch_above_surface_px=5,
             debug_dir=None,
         )
 
