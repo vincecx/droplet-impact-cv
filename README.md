@@ -44,10 +44,13 @@ uv run droplet-impact-cv path/to/image_sequences \
 4. Subtract each frame from the background in both intensity directions. A
    strong threshold identifies reliable foreground; a connected weak threshold
    recovers faint, transparent liquid without admitting isolated weak artifacts.
-5. Clean the foreground mask, select the component contacting the surface, fill
-   its enclosed interior, and measure its outermost span inside the surface band.
+5. Clean the foreground mask, select the gas-side droplet component nearest the
+   surface, fill its enclosed interior, and measure the surface-contact span.
 6. Detect impact when that span reaches `--min-impact-width-px`, convert pixels
    to millimetres and frames to time, then write the CSV and selected overlays.
+7. Before impact, define the reference drop size at the first frame where the
+   surface-normal clearance of the lower silhouette reaches one half of its
+   equivalent diameter.
 
 The detected foreground therefore represents image change. Transparent liquid 
 that brightens a dark substrate can still be part of the droplet silhouette.
@@ -115,9 +118,9 @@ interior. If noise forms separate components, tune `--min-droplet-area-px` and
 | --- | --- | --- |
 | `-o`, `--output-csv` | `outputs/<input-folder>/spreading_diameter.csv` | CSV output path. |
 | `--foreground-depth-px` | `220` | Foreground ROI depth below the surface. |
-| `--contact-above-px` | `20` | Component-selection window above the surface. |
-| `--contact-below-px` | `170` | Component-selection window below the surface. |
-| `--min-contact-pixels` | `30` | Required foreground pixel count just above the surface. |
+| `--contact-above-px` | `20` | Legacy compatibility option; no longer limits airborne-drop selection. |
+| `--contact-below-px` | `170` | Legacy compatibility option; no longer limits airborne-drop selection. |
+| `--min-contact-pixels` | `30` | Minimum gas-side foreground pixels for the selected droplet. |
 | `--min-impact-width-px` | `30` | Width that marks the first impact frame. |
 | `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
 | `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
@@ -132,14 +135,32 @@ CSV is written to `outputs/example/spreading_diameter.csv` and diagnostic
 overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
 choose a different directory for debug overlays.
 
-By default, the reported spreading diameter is the maximum width of the
+The reported `spreading_diameter` is the maximum width of the
 detected liquid silhouette within `--surface-band-px` pixels above or below the
 fixed surface line (default: 3): the distance between the outermost points
 where the silhouette enters that band. Frames where the silhouette stays clear
-of the band report a diameter of `0`. With `--HO 1`, it is instead the
+of the band report a spreading diameter of `0`. With `--HO 1`, it is instead the
 rim-to-rim width of the entire detected droplet silhouette, so lifted droplets
 remain measurable. A frame is marked as the impact frame once the selected
 width reaches `--min-impact-width-px` (default: 30).
+
+### Reference equivalent diameter
+
+The program uses substrate-aligned coordinates: `surface_parallel` is tangent
+to the fixed surface line, while `surface_normal` is perpendicular to it. This
+remains physically meaningful for a tilted substrate; it replaces ambiguous
+image-space “horizontal” and “vertical” names.
+
+For every selected pre-impact silhouette it measures the full projection spans
+`D_parallel` and `D_normal`, then calculates
+`D_eq = (D_normal × D_parallel²)^(1/3)`. The first frame satisfying
+`surface_clearance ≤ D_eq / 2` is saved as `reference_frame`. The dimensions
+frozen there are named `initial_equivalent_diameter`,
+`initial_surface_parallel_diameter`, and `initial_surface_normal_diameter`;
+they are repeated on every CSV row. Before that frame, debug overlays contain
+only the source image and surface line; starting at it, they add the liquid
+mask and measurement lines. Overlay labels use the conventional `D0` prefix
+for these initial reference dimensions.
 
 By default, debug overlays are generated for every frame (use `--debug-interval`
 to change). Note that each run first deletes any frame-numbered overlay PNGs
@@ -151,8 +172,21 @@ The CSV columns are:
 - `filename`
 - `frame`
 - `time_ms`
-- `diameter_px`
-- `diameter_mm`
+- `spreading_diameter_px`
+- `spreading_diameter_mm`
+- `contact_line_diameter_px`
+- `contact_line_diameter_mm`
+- `rim_to_rim_diameter_px`
+- `rim_to_rim_diameter_mm`
+- `reference_frame`
+- `initial_equivalent_diameter_px`
+- `initial_equivalent_diameter_mm`
+- `initial_surface_parallel_diameter_px`
+- `initial_surface_parallel_diameter_mm`
+- `initial_surface_normal_diameter_px`
+- `initial_surface_normal_diameter_mm`
+- `surface_clearance_px`
+- `surface_clearance_mm`
 - `impact_frame`
 - `surface_y_px`
 - `component_area_px`

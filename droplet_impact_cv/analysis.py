@@ -160,8 +160,10 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
     if config.debug_dir is not None:
         clear_debug_overlays(config.debug_dir)
 
-    pending: list[tuple[int, Path, float, int]] = []
+    pending = []
     impact_frame: int | None = None
+    reference_frame: int | None = None
+    reference_measurement = None
 
     for file_path in files:
         frame_number = frame_number_from_filename(file_path)
@@ -179,39 +181,84 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         is_touching = touches_surface(measurement, effective_config)
         if impact_frame is None and is_touching:
             impact_frame = frame_number
-        pending.append(
-            (
-                frame_number,
-                file_path,
-                measurement.diameter_px,
-                measurement.area_px,
-            )
-        )
+        is_reference_frame = False
+        if (
+            reference_measurement is None
+            and measurement.equivalent_diameter_px is not None
+            and measurement.surface_clearance_px is not None
+            and measurement.surface_clearance_px
+            <= measurement.equivalent_diameter_px / 2.0
+        ):
+            reference_frame = frame_number
+            reference_measurement = measurement
+            is_reference_frame = True
+        pending.append((frame_number, file_path, measurement))
 
         if config.debug_dir is not None and (
             frame_number == first_frame_number
             or frame_number % config.debug_every == 0
+            or is_reference_frame
             or (is_touching and abs(frame_number - (impact_frame or frame_number)) <= 2)
         ):
-            diameter_mm = measurement.diameter_px * config.pixel_size_mm
             debug_path = config.debug_dir / f"{frame_number:06d}.png"
             write_debug_overlay(
                 debug_path,
                 image,
-                measurement.mask,
+                measurement.mask if reference_measurement is not None else None,
                 surface_line,
                 (
                     measurement.contact_bbox
                     if effective_config.hydrophobic
                     else measurement.bbox
-                ),
+                ) if reference_measurement is not None else None,
                 frame_number,
-                diameter_mm,
-                rim_bbox=measurement.rim_bbox,
+                spreading_diameter_mm=(
+                    measurement.spreading_diameter_px * config.pixel_size_mm
+                ),
+                contact_line_diameter_mm=(
+                    measurement.contact_line_diameter_px * config.pixel_size_mm
+                    if measurement.contact_line_diameter_px is not None
+                    else None
+                ),
+                rim_to_rim_diameter_mm=(
+                    measurement.rim_to_rim_diameter_px * config.pixel_size_mm
+                    if measurement.rim_to_rim_diameter_px is not None
+                    else None
+                ),
+                surface_parallel_line=(
+                    measurement.surface_parallel_line
+                    if reference_measurement is not None
+                    else None
+                ),
+                surface_normal_line=(
+                    measurement.surface_normal_line
+                    if reference_measurement is not None
+                    else None
+                ),
+                initial_equivalent_diameter_mm=(
+                    reference_measurement.equivalent_diameter_px * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.equivalent_diameter_px is not None
+                    else None
+                ),
+                initial_surface_parallel_diameter_mm=(
+                    reference_measurement.surface_parallel_diameter_px
+                    * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.surface_parallel_diameter_px is not None
+                    else None
+                ),
+                initial_surface_normal_diameter_mm=(
+                    reference_measurement.surface_normal_diameter_px
+                    * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.surface_normal_diameter_px is not None
+                    else None
+                ),
             )
 
     measurements: list[FrameMeasurement] = []
-    for frame_number, file_path, diameter_px, area in pending:
+    for frame_number, file_path, measurement in pending:
         if impact_frame is None:
             frame_offset = frame_number - first_frame_number
         elif config.time_zero == "impact":
@@ -222,20 +269,79 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         if not config.include_pre_impact and impact_frame is not None and frame_number < impact_frame:
             continue
 
-        diameter_mm = diameter_px * config.pixel_size_mm
+        spreading_diameter_mm = measurement.spreading_diameter_px * config.pixel_size_mm
         measurements.append(
             FrameMeasurement(
                 frame_number=frame_number,
                 filename=file_path.name,
                 time_ms=frame_offset / config.fps * 1000.0,
-                diameter_px=diameter_px,
-                diameter_mm=diameter_mm,
-                component_area_px=area,
+                spreading_diameter_px=measurement.spreading_diameter_px,
+                spreading_diameter_mm=spreading_diameter_mm,
+                component_area_px=measurement.area_px,
                 surface_y=surface_line.center_y_int(),
                 impact_frame=impact_frame,
                 fps=config.fps,
                 pixel_size_mm=config.pixel_size_mm,
                 surface_frame=config.surface_frame,
+                contact_line_diameter_px=measurement.contact_line_diameter_px,
+                contact_line_diameter_mm=(
+                    measurement.contact_line_diameter_px * config.pixel_size_mm
+                    if measurement.contact_line_diameter_px is not None
+                    else None
+                ),
+                rim_to_rim_diameter_px=measurement.rim_to_rim_diameter_px,
+                rim_to_rim_diameter_mm=(
+                    measurement.rim_to_rim_diameter_px * config.pixel_size_mm
+                    if measurement.rim_to_rim_diameter_px is not None
+                    else None
+                ),
+                reference_frame=reference_frame,
+                initial_equivalent_diameter_px=(
+                    reference_measurement.equivalent_diameter_px
+                    if reference_measurement is not None
+                    else None
+                ),
+                initial_equivalent_diameter_mm=(
+                    reference_measurement.equivalent_diameter_px * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.equivalent_diameter_px is not None
+                    else None
+                ),
+                initial_surface_parallel_diameter_px=(
+                    reference_measurement.surface_parallel_diameter_px
+                    if reference_measurement is not None
+                    else None
+                ),
+                initial_surface_parallel_diameter_mm=(
+                    reference_measurement.surface_parallel_diameter_px
+                    * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.surface_parallel_diameter_px is not None
+                    else None
+                ),
+                initial_surface_normal_diameter_px=(
+                    reference_measurement.surface_normal_diameter_px
+                    if reference_measurement is not None
+                    else None
+                ),
+                initial_surface_normal_diameter_mm=(
+                    reference_measurement.surface_normal_diameter_px
+                    * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.surface_normal_diameter_px is not None
+                    else None
+                ),
+                surface_clearance_px=(
+                    reference_measurement.surface_clearance_px
+                    if reference_measurement is not None
+                    else None
+                ),
+                surface_clearance_mm=(
+                    reference_measurement.surface_clearance_px * config.pixel_size_mm
+                    if reference_measurement is not None
+                    and reference_measurement.surface_clearance_px is not None
+                    else None
+                ),
             )
         )
 

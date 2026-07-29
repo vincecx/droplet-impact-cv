@@ -147,6 +147,39 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
             self.assertFalse(stale_overlay.exists())
             self.assertTrue(unrelated_file.exists())
 
+    def test_reference_diameter_is_frozen_when_clearance_reaches_half_diameter(self) -> None:
+        with TemporaryDirectory() as temporary_dir:
+            input_dir = Path(temporary_dir)
+            debug_dir = input_dir / "debug_overlays"
+            background = np.full((120, 140), 4000, dtype=np.uint16)
+            background[80:] = 2000
+            tifffile.imwrite(input_dir / "frame000001.tif", background)
+            for frame_number, top in ((2, 20), (3, 30), (4, 34), (5, 40)):
+                image = background.copy()
+                image[top : top + 30, 30:70] = 2000
+                tifffile.imwrite(input_dir / f"frame{frame_number:06d}.tif", image)
+
+            config = AnalysisConfig(
+                input_dir=input_dir,
+                output_csv=input_dir / "output.csv",
+                surface_y=80,
+                min_area_px=1,
+                min_touch_pixels=1,
+                include_pre_impact=True,
+                debug_dir=debug_dir,
+                debug_every=100,
+            )
+            with patch("droplet_impact_cv.analysis.write_debug_overlay") as overlay:
+                measurements = analyze_sequence(config)
+
+        self.assertEqual([row.reference_frame for row in measurements], [4, 4, 4, 4, 4])
+        self.assertTrue(
+            all(row.initial_equivalent_diameter_px is not None for row in measurements)
+        )
+        self.assertEqual(overlay.call_count, 2)
+        self.assertIsNone(overlay.call_args_list[0].args[2])
+        self.assertIsNotNone(overlay.call_args_list[1].args[2])
+
 
 class ContourMeasurementTests(unittest.TestCase):
     def test_measurement_never_adds_pixels_outside_detected_contour(self) -> None:
@@ -164,7 +197,7 @@ class ContourMeasurementTests(unittest.TestCase):
         measurement = component_measurement(mask, SurfaceLine(50.0, angle_deg=0.0), config)
 
         self.assertFalse(np.any(measurement.mask & ~mask.astype(bool)))
-        self.assertEqual(measurement.diameter_px, 50.0)
+        self.assertEqual(measurement.spreading_diameter_px, 50.0)
 
 
 if __name__ == "__main__":

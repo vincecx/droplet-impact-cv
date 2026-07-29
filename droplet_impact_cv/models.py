@@ -57,24 +57,45 @@ class FrameMeasurement:
     frame_number: int
     filename: str
     time_ms: float
-    diameter_px: float
-    diameter_mm: float
+    spreading_diameter_px: float
+    spreading_diameter_mm: float
     component_area_px: int
     surface_y: int
     impact_frame: int | None
     fps: float
     pixel_size_mm: float
     surface_frame: int | None
+    contact_line_diameter_px: float | None = None
+    contact_line_diameter_mm: float | None = None
+    rim_to_rim_diameter_px: float | None = None
+    rim_to_rim_diameter_mm: float | None = None
+    reference_frame: int | None = None
+    initial_equivalent_diameter_px: float | None = None
+    initial_equivalent_diameter_mm: float | None = None
+    initial_surface_parallel_diameter_px: float | None = None
+    initial_surface_parallel_diameter_mm: float | None = None
+    initial_surface_normal_diameter_px: float | None = None
+    initial_surface_normal_diameter_mm: float | None = None
+    surface_clearance_px: float | None = None
+    surface_clearance_mm: float | None = None
 
 
 @dataclass(frozen=True)
 class ComponentMeasurement:
-    diameter_px: float
+    spreading_diameter_px: float
     area_px: int
     bbox: tuple[int, int, int, int] | None
     mask: np.ndarray
     contact_bbox: tuple[int, int, int, int] | None = None
     rim_bbox: tuple[int, int, int, int] | None = None
+    contact_line_diameter_px: float | None = None
+    rim_to_rim_diameter_px: float | None = None
+    surface_parallel_diameter_px: float | None = None
+    surface_normal_diameter_px: float | None = None
+    equivalent_diameter_px: float | None = None
+    surface_clearance_px: float | None = None
+    surface_parallel_line: tuple[int, int, int, int] | None = None
+    surface_normal_line: tuple[int, int, int, int] | None = None
 
 
 @dataclass(frozen=True)

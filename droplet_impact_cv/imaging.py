@@ -268,17 +268,14 @@ def select_liquid_component(
 
     yy, xx = np.indices(mask.shape)
     distance_from_surface = yy - surface_line.y_at(xx, mask.shape[1])
-    touch_region = (
-        (distance_from_surface >= -config.touch_above_surface_px)
-        & (distance_from_surface <= config.touch_below_surface_px)
-    )
-    above_touch_region = (
-        (distance_from_surface >= -config.touch_above_surface_px)
-        & (distance_from_surface <= 0)
-    )
+    # A reference droplet is measured while it is still separated from the
+    # substrate, so candidate selection must not require a surface contact.
+    # Restrict candidates to the gas-side silhouette and prefer the one closest
+    # to the surface; this rejects the mirror image below the substrate.
+    gas_side = distance_from_surface <= 0
 
     best_label = 0
-    best_score = -1
+    best_clearance = math.inf
     best_area = 0
 
     for label in range(1, count + 1):
@@ -286,14 +283,16 @@ def select_liquid_component(
         area = int(component.sum())
         if area < config.min_area_px:
             continue
-        above_touch_pixels = int((component & above_touch_region).sum())
-        if above_touch_pixels < config.min_touch_pixels:
+        gas_side_pixels = int((component & gas_side).sum())
+        if gas_side_pixels < config.min_touch_pixels:
             continue
-        touch_pixels = int((component & touch_region).sum())
-        score = touch_pixels * 1_000_000 + area
-        if score > best_score:
+        bottom_clearance_px = max(0.0, -float(distance_from_surface[component].max()))
+        if (
+            bottom_clearance_px < best_clearance
+            or (bottom_clearance_px == best_clearance and area > best_area)
+        ):
             best_label = label
-            best_score = score
+            best_clearance = bottom_clearance_px
             best_area = area
 
     if best_label == 0:
@@ -420,6 +419,66 @@ def rim_to_rim_segment(
     return best_length, (x_min, y_min, x_max, y_max)
 
 
+def surface_aligned_dimensions(
+    component: np.ndarray,
+    surface_line: SurfaceLine,
+) -> tuple[
+    float,
+    float,
+    float,
+    float,
+    tuple[int, int, int, int],
+    tuple[int, int, int, int],
+] | None:
+    """Measure a silhouette in axes tangent and normal to the substrate.
+
+    The surface-parallel and surface-normal diameters are full projection
+    spans. Their geometric mean ``(D_parallel² D_normal)^(1/3)`` is the
+    equivalent spherical diameter of the axisymmetric approximation.
+    """
+    ys, xs = np.nonzero(component)
+    if xs.size == 0:
+        return None
+
+    slope = surface_line.slope
+    scale = math.sqrt(1.0 + slope**2)
+    tangent_x, tangent_y = 1.0 / scale, slope / scale
+    normal_x, normal_y = -slope / scale, 1.0 / scale
+    tangent = xs * tangent_x + ys * tangent_y
+    normal = xs * normal_x + ys * normal_y
+    tangent_min, tangent_max = float(tangent.min()), float(tangent.max())
+    normal_min, normal_max = float(normal.min()), float(normal.max())
+    surface_parallel_diameter_px = tangent_max - tangent_min + 1.0
+    surface_normal_diameter_px = normal_max - normal_min + 1.0
+    equivalent_diameter_px = (
+        surface_normal_diameter_px * surface_parallel_diameter_px**2
+    ) ** (1.0 / 3.0)
+
+    def point_at(tangent_position: float, normal_position: float) -> tuple[int, int]:
+        x = tangent_position * tangent_x + normal_position * normal_x
+        y = tangent_position * tangent_y + normal_position * normal_y
+        return int(round(x)), int(round(y))
+
+    parallel_line = (
+        *point_at(tangent_min, (normal_min + normal_max) / 2.0),
+        *point_at(tangent_max, (normal_min + normal_max) / 2.0),
+    )
+    normal_line = (
+        *point_at((tangent_min + tangent_max) / 2.0, normal_min),
+        *point_at((tangent_min + tangent_max) / 2.0, normal_max),
+    )
+    signed_normal_distance = (ys - surface_line.y_at(xs, component.shape[1])) / scale
+    surface_clearance_px = max(0.0, -float(signed_normal_distance.max()))
+    return (
+        surface_parallel_diameter_px,
+        surface_normal_diameter_px,
+        equivalent_diameter_px,
+        surface_clearance_px,
+        parallel_line,
+        normal_line,
+    )
+
+
 def fill_droplet_interior(
     component: np.ndarray,
     surface_line: SurfaceLine,
@@ -461,6 +520,7 @@ def component_measurement(
     # Seal apparent holes that open through a few pixels near the substrate,
     # then treat the selected droplet's enclosed bright regions as liquid.
     component = fill_droplet_interior(component, surface_line)
+    aligned_dimensions = surface_aligned_dimensions(component, surface_line)
 
     # Hydrophobic droplets are measured rim-to-rim. Otherwise, the diameter is
     # the silhouette width where it meets the fixed surface-line band. Both
@@ -470,6 +530,7 @@ def component_measurement(
         component, surface_line, config.surface_band_px
     )
     contact_bbox = None
+    contact_line_diameter_px = 0.0
     if contact_bounds is not None:
         contact_x_min, contact_x_max = contact_bounds
         contact_bbox = (
@@ -477,6 +538,10 @@ def component_measurement(
             int(round(surface_line.y_at(contact_x_min, component.shape[1]))),
             contact_x_max,
             int(round(surface_line.y_at(contact_x_max, component.shape[1]))),
+        )
+        contact_line_diameter_px = float(
+            (contact_x_max - contact_x_min + 1)
+            * math.sqrt(1.0 + surface_line.slope**2)
         )
     if config.hydrophobic:
         rim_measurement = rim_to_rim_segment(component, surface_line)
@@ -493,30 +558,81 @@ def component_measurement(
     if clipped_component.any():
         component = clipped_component
     area = int(component.sum())
+    if aligned_dimensions is None:
+        surface_parallel_diameter_px = None
+        surface_normal_diameter_px = None
+        equivalent_diameter_px = None
+        surface_clearance_px = None
+        surface_parallel_line = None
+        surface_normal_line = None
+    else:
+        (
+            surface_parallel_diameter_px,
+            surface_normal_diameter_px,
+            equivalent_diameter_px,
+            surface_clearance_px,
+            surface_parallel_line,
+            surface_normal_line,
+        ) = aligned_dimensions
     if config.hydrophobic:
         if rim_measurement is None:
             return ComponentMeasurement(0.0, area, None, component)
-        diameter_px, rim_bbox = rim_measurement
+        spreading_diameter_px, rim_bbox = rim_measurement
         return ComponentMeasurement(
-            diameter_px,
+            spreading_diameter_px,
             area,
             rim_bbox,
             component,
             contact_bbox=contact_bbox,
             rim_bbox=rim_bbox,
+            contact_line_diameter_px=contact_line_diameter_px,
+            rim_to_rim_diameter_px=spreading_diameter_px,
+            surface_parallel_diameter_px=surface_parallel_diameter_px,
+            surface_normal_diameter_px=surface_normal_diameter_px,
+            equivalent_diameter_px=equivalent_diameter_px,
+            surface_clearance_px=surface_clearance_px,
+            surface_parallel_line=surface_parallel_line,
+            surface_normal_line=surface_normal_line,
         )
 
     if contact_bounds is None:
-        return ComponentMeasurement(0.0, area, None, component)
+        assert aligned_dimensions is not None
+        (
+            surface_parallel_diameter_px,
+            surface_normal_diameter_px,
+            equivalent_diameter_px,
+            surface_clearance_px,
+            surface_parallel_line,
+            surface_normal_line,
+        ) = aligned_dimensions
+        return ComponentMeasurement(
+            0.0,
+            area,
+            None,
+            component,
+            surface_parallel_diameter_px=surface_parallel_diameter_px,
+            surface_normal_diameter_px=surface_normal_diameter_px,
+            equivalent_diameter_px=equivalent_diameter_px,
+            surface_clearance_px=surface_clearance_px,
+            surface_parallel_line=surface_parallel_line,
+            surface_normal_line=surface_normal_line,
+        )
     assert contact_bbox is not None
     x_min, y_min, x_max, y_max = contact_bbox
-    diameter_px = float((x_max - x_min + 1) * math.sqrt(1.0 + surface_line.slope**2))
+    spreading_diameter_px = contact_line_diameter_px
     return ComponentMeasurement(
-        diameter_px,
+        spreading_diameter_px,
         area,
         (x_min, y_min, x_max, y_max),
         component,
         contact_bbox=contact_bbox,
+        contact_line_diameter_px=spreading_diameter_px,
+        surface_parallel_diameter_px=surface_parallel_diameter_px,
+        surface_normal_diameter_px=surface_normal_diameter_px,
+        equivalent_diameter_px=equivalent_diameter_px,
+        surface_clearance_px=surface_clearance_px,
+        surface_parallel_line=surface_parallel_line,
+        surface_normal_line=surface_normal_line,
     )
 
 
@@ -524,7 +640,7 @@ def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -
     if measurement.bbox is None:
         return False
     if config.hydrophobic:
-        return measurement.diameter_px >= config.min_impact_width_px
+        return measurement.spreading_diameter_px >= config.min_impact_width_px
     x_min, _y_min, x_max, _y_max = measurement.bbox
     return (x_max - x_min + 1) >= config.min_impact_width_px
 

@@ -383,12 +383,21 @@ def main(argv: list[str] | None = None) -> None:
     write_csv(config.output_csv, measurements)
 
     impact_frame = measurements[0].impact_frame if measurements else None
-    valid = [row for row in measurements if not math.isnan(row.diameter_mm)]
+    valid = [row for row in measurements if not math.isnan(row.spreading_diameter_mm)]
     print(f"Wrote {len(measurements)} rows to {config.output_csv}")
     if valid:
-        max_row = max(valid, key=lambda row: row.diameter_mm)
+        max_row = max(valid, key=lambda row: row.spreading_diameter_mm)
         print(f"Surface y: {valid[0].surface_y}px")
         print(f"Impact frame: {impact_frame if impact_frame is not None else 'not detected'}")
-        print(f"Max diameter: {max_row.diameter_mm:.6f} mm at {max_row.time_ms:.6f} ms")
+        print(
+            "Max spreading diameter: "
+            f"{max_row.spreading_diameter_mm:.6f} mm at {max_row.time_ms:.6f} ms"
+        )
+        if valid[0].initial_equivalent_diameter_mm is not None:
+            print(
+                "Initial equivalent diameter: "
+                f"{valid[0].initial_equivalent_diameter_mm:.6f} mm "
+                f"at frame {valid[0].reference_frame}"
+            )
     else:
         print("No valid droplet diameter measurements were found.")

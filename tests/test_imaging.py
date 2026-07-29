@@ -182,7 +182,7 @@ class ForegroundMaskTests(unittest.TestCase):
 
         self.assertEqual(mask[50, 20], 1)
         self.assertEqual(mask[20, 5], 0)
-        self.assertEqual(measurement.diameter_px, 62.0)
+        self.assertEqual(measurement.spreading_diameter_px, 62.0)
 
 
 class ComponentMeasurementTests(unittest.TestCase):
@@ -205,8 +205,10 @@ class ComponentMeasurementTests(unittest.TestCase):
         contact_measurement = component_measurement(mask, surface_line, contact_config)
         rim_measurement = component_measurement(mask, surface_line, hydrophobic_config)
 
-        self.assertEqual(contact_measurement.diameter_px, 40.0)
-        self.assertEqual(rim_measurement.diameter_px, 80.0)
+        self.assertEqual(contact_measurement.spreading_diameter_px, 40.0)
+        self.assertEqual(rim_measurement.spreading_diameter_px, 80.0)
+        self.assertEqual(rim_measurement.contact_line_diameter_px, 40.0)
+        self.assertEqual(rim_measurement.rim_to_rim_diameter_px, 80.0)
         self.assertEqual(rim_measurement.contact_bbox, (50, 50, 89, 50))
         self.assertEqual(rim_measurement.rim_bbox, (30, 30, 109, 30))
 
@@ -230,7 +232,25 @@ class ComponentMeasurementTests(unittest.TestCase):
         assert measurement.rim_bbox is not None
         x0, y0, x1, y1 = measurement.rim_bbox
         self.assertAlmostEqual(y1 - y0, 0.5 * (x1 - x0), delta=1.0)
-        self.assertGreater(measurement.diameter_px, 88.0)
+        self.assertGreater(measurement.spreading_diameter_px, 88.0)
+
+    def test_surface_aligned_dimensions_define_equivalent_diameter_and_clearance(self) -> None:
+        mask = np.zeros((120, 140), dtype=np.uint8)
+        # 40 px parallel to, 30 px normal to, and 21 px above the surface.
+        mask[20:50, 30:70] = 1
+        config = AnalysisConfig(
+            input_dir=Path("input"), output_csv=Path("output.csv"),
+            min_area_px=1, min_touch_pixels=1, debug_dir=None,
+        )
+
+        measurement = component_measurement(mask, SurfaceLine(70.0, angle_deg=0.0), config)
+
+        self.assertEqual(measurement.surface_parallel_diameter_px, 40.0)
+        self.assertEqual(measurement.surface_normal_diameter_px, 30.0)
+        self.assertAlmostEqual(measurement.equivalent_diameter_px or 0.0, 36.3424, places=4)
+        self.assertEqual(measurement.surface_clearance_px, 21.0)
+        self.assertEqual(measurement.surface_parallel_line, (30, 34, 69, 34))
+        self.assertEqual(measurement.surface_normal_line, (50, 20, 50, 49))
 
     def test_overlay_is_clipped_at_surface_without_changing_contact_width(self) -> None:
         mask = np.zeros((80, 100), dtype=np.uint8)
@@ -249,7 +269,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         yy, xx = np.indices(measurement.mask.shape)
         distance_from_surface = yy - surface_line.y_at(xx, measurement.mask.shape[1])
         self.assertFalse(np.any(measurement.mask & (distance_from_surface > 0)))
-        self.assertEqual(measurement.diameter_px, 60.0)
+        self.assertEqual(measurement.spreading_diameter_px, 60.0)
 
     def test_bright_gap_open_at_surface_is_filled_as_droplet_interior(self) -> None:
         mask = np.zeros((80, 100), dtype=np.uint8)
@@ -265,7 +285,7 @@ class ComponentMeasurementTests(unittest.TestCase):
 
         measurement = component_measurement(mask, SurfaceLine(50.0, angle_deg=0.0), config)
 
-        self.assertEqual(measurement.diameter_px, 60.0)
+        self.assertEqual(measurement.spreading_diameter_px, 60.0)
         self.assertTrue(measurement.mask[50, 50])
 
     def test_component_clear_of_surface_band_measures_zero(self) -> None:
@@ -283,7 +303,7 @@ class ComponentMeasurementTests(unittest.TestCase):
 
         measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
 
-        self.assertEqual(measurement.diameter_px, 0.0)
+        self.assertEqual(measurement.spreading_diameter_px, 0.0)
         self.assertIsNone(measurement.bbox)
         self.assertGreater(measurement.area_px, 0)
 
@@ -302,7 +322,7 @@ class ComponentMeasurementTests(unittest.TestCase):
 
         measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
 
-        self.assertEqual(measurement.diameter_px, 60.0)
+        self.assertEqual(measurement.spreading_diameter_px, 60.0)
 
     def test_fragmented_surface_intersection_measures_outer_span(self) -> None:
         # A rebounding ring can lift off the line mid-span; the diameter is
@@ -322,7 +342,7 @@ class ComponentMeasurementTests(unittest.TestCase):
 
         measurement = component_measurement(mask, SurfaceLine(50.0, 0.0), config)
 
-        self.assertEqual(measurement.diameter_px, 60.0)
+        self.assertEqual(measurement.spreading_diameter_px, 60.0)
 
 
 class SurfaceCalibrationTests(unittest.TestCase):
