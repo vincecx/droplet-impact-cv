@@ -177,7 +177,7 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
             all(row.initial_equivalent_diameter_px is not None for row in measurements)
         )
         self.assertEqual(overlay.call_count, 2)
-        self.assertIsNone(overlay.call_args_list[0].args[2])
+        self.assertIsNotNone(overlay.call_args_list[0].args[2])
         self.assertIsNotNone(overlay.call_args_list[1].args[2])
 
 

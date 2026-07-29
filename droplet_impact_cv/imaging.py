@@ -261,6 +261,7 @@ def select_liquid_component(
     mask: np.ndarray,
     surface_line: SurfaceLine,
     config: AnalysisConfig,
+    preferred_center_x: float | None = None,
 ) -> tuple[np.ndarray, int]:
     labels, count = ndi.label(mask)
     empty = np.zeros(mask.shape, dtype=bool)
@@ -278,6 +279,7 @@ def select_liquid_component(
     best_label = 0
     best_clearance = math.inf
     best_area = 0
+    best_center_distance = math.inf
 
     for label in range(1, count + 1):
         component = labels == label
@@ -287,12 +289,20 @@ def select_liquid_component(
         gas_side_pixels = int((component & gas_side).sum())
         if gas_side_pixels < config.min_touch_pixels:
             continue
+        bbox = component_bbox(component)
+        assert bbox is not None
+        x_min, _y_min, x_max, _y_max = bbox
+        center_distance = (
+            abs(((x_min + x_max) / 2.0) - preferred_center_x)
+            if preferred_center_x is not None
+            else 0.0
+        )
         bottom_clearance_px = max(0.0, -float(distance_from_surface[component].max()))
-        if (
-            bottom_clearance_px < best_clearance
-            or (bottom_clearance_px == best_clearance and area > best_area)
-        ):
+        candidate_score = (center_distance, bottom_clearance_px, -area)
+        best_score = (best_center_distance, best_clearance, -best_area)
+        if candidate_score < best_score:
             best_label = label
+            best_center_distance = center_distance
             best_clearance = bottom_clearance_px
             best_area = area
 
@@ -513,8 +523,11 @@ def component_measurement(
     mask: np.ndarray,
     surface_line: SurfaceLine,
     config: AnalysisConfig,
+    preferred_center_x: float | None = None,
 ) -> ComponentMeasurement:
-    component, area = select_liquid_component(mask, surface_line, config)
+    component, area = select_liquid_component(
+        mask, surface_line, config, preferred_center_x
+    )
     if area == 0:
         return ComponentMeasurement(0.0, 0, None, component)
 
@@ -954,6 +967,47 @@ def select_nonreflection_calibration_component(
         best_area = area
 
     return best_component
+
+
+def calibration_target_center_x(
+    files: list[Path],
+    background: np.ndarray,
+    frame_number: int,
+    threshold: float,
+    coarse_surface_y: int,
+    config: AnalysisConfig,
+    structure: np.ndarray,
+    reflection_mode: str,
+    weak_threshold: float | None = None,
+) -> float | None:
+    """Return the calibrated droplet's horizontal centre, when available.
+
+    The calibration frame identifies which droplet in a multi-drop recording
+    is the subject of the measurement. Subsequent frames can otherwise select
+    an unrelated drop merely because it happens to be closer to the surface.
+    """
+    mask = calibration_frame_mask(
+        files,
+        background,
+        frame_number,
+        threshold,
+        structure,
+        weak_threshold,
+        config.weak_propagation_px,
+    )
+    if reflection_mode == "none":
+        component = select_nonreflection_calibration_component(mask, config)
+        bbox = component_bbox(component) if component is not None else None
+    else:
+        selected = select_calibration_component(mask, coarse_surface_y, config)
+        if selected is None:
+            selected = select_symmetric_calibration_component(
+                mask, coarse_surface_y, config
+            )
+        bbox = selected[1] if selected is not None else None
+    if bbox is None:
+        return None
+    return (bbox[0] + bbox[2]) / 2.0
 
 
 def estimate_lower_contour_line(

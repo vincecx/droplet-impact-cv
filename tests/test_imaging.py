@@ -13,6 +13,7 @@ from droplet_impact_cv.imaging import (
     component_measurement,
     estimate_contact_line,
     estimate_surface_line_from_nonreflection_frame,
+    select_liquid_component,
     estimate_vertical_symmetry_y,
     foreground_mask,
     find_image_files,
@@ -187,6 +188,27 @@ class ForegroundMaskTests(unittest.TestCase):
 
 
 class ComponentMeasurementTests(unittest.TestCase):
+    def test_calibrated_center_selects_target_over_closer_drop(self) -> None:
+        mask = np.zeros((100, 160), dtype=np.uint8)
+        # The left droplet is closer to the surface, but calibration identifies
+        # the target as the central droplet.
+        mask[45:51, 5:35] = 1
+        mask[20:40, 90:120] = 1
+        config = AnalysisConfig(
+            input_dir=Path("input"),
+            output_csv=Path("output.csv"),
+            min_area_px=1,
+            min_touch_pixels=1,
+            debug_dir=None,
+        )
+
+        component, _area = select_liquid_component(
+            mask, SurfaceLine(50.0, 0.0), config, preferred_center_x=105.0
+        )
+
+        self.assertTrue(component[30, 105])
+        self.assertFalse(component[48, 20])
+
     def test_impact_detection_always_uses_contact_line_diameter(self) -> None:
         mask = np.zeros((100, 140), dtype=np.uint8)
         # The lifted rim is deliberately wider than the contact line.

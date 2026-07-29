@@ -30,11 +30,13 @@ class OutputTests(unittest.TestCase):
                 None,
                 1,
                 1.0,
+                contact_line_diameter_mm=0.5,
             )
 
         self.assertEqual(put_text.call_args.args[3], cv2.FONT_HERSHEY_DUPLEX)
         self.assertEqual(put_text.call_args.args[7], cv2.LINE_AA)
         self.assertEqual(put_text.call_args.args[4], 0.7)
+        self.assertNotIn("D0", put_text.call_args.args[1])
 
     def test_hydrophobic_overlay_draws_contact_and_rim_measurements(self) -> None:
         image = np.zeros((80, 100), dtype=np.float32)

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from .imaging import (
     build_background,
+    calibration_target_center_x,
     component_measurement,
     detect_reflection_mode_from_frame,
     estimate_surface_y,
@@ -127,6 +128,21 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         resolved_reflection_mode = "mirror"
 
     effective_config = replace(config, reflection_mode=resolved_reflection_mode)
+    target_center_x = (
+        calibration_target_center_x(
+            files,
+            background,
+            config.surface_frame,
+            preliminary_threshold,
+            coarse_surface_y,
+            config,
+            structure,
+            resolved_reflection_mode,
+            weak_threshold=preliminary_weak_threshold,
+        )
+        if config.surface_frame is not None
+        else None
+    )
 
     if calibrated_surface_line is not None:
         surface_angle_deg = calibrated_surface_line.angle_deg
@@ -177,7 +193,9 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             structure,
             weak_threshold=weak_threshold,
         )
-        measurement = component_measurement(mask, surface_line, effective_config)
+        measurement = component_measurement(
+            mask, surface_line, effective_config, target_center_x
+        )
         is_touching = touches_surface(measurement, effective_config)
         if impact_frame is None and is_touching:
             impact_frame = frame_number
@@ -204,17 +222,14 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             write_debug_overlay(
                 debug_path,
                 image,
-                measurement.mask if reference_measurement is not None else None,
+                measurement.mask,
                 surface_line,
-                (
-                    measurement.contact_bbox
-                    if effective_config.hydrophobic
-                    else measurement.bbox
-                ) if reference_measurement is not None else None,
+                measurement.contact_bbox,
                 frame_number,
                 spreading_diameter_mm=(
                     measurement.spreading_diameter_px * config.pixel_size_mm
                 ),
+                rim_bbox=measurement.rim_bbox,
                 contact_line_diameter_mm=(
                     measurement.contact_line_diameter_px * config.pixel_size_mm
                     if measurement.contact_line_diameter_px is not None
@@ -223,36 +238,6 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 rim_to_rim_diameter_mm=(
                     measurement.rim_to_rim_diameter_px * config.pixel_size_mm
                     if measurement.rim_to_rim_diameter_px is not None
-                    else None
-                ),
-                surface_parallel_line=(
-                    measurement.surface_parallel_line
-                    if reference_measurement is not None
-                    else None
-                ),
-                surface_normal_line=(
-                    measurement.surface_normal_line
-                    if reference_measurement is not None
-                    else None
-                ),
-                initial_equivalent_diameter_mm=(
-                    reference_measurement.equivalent_diameter_px * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.equivalent_diameter_px is not None
-                    else None
-                ),
-                initial_surface_parallel_diameter_mm=(
-                    reference_measurement.surface_parallel_diameter_px
-                    * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.surface_parallel_diameter_px is not None
-                    else None
-                ),
-                initial_surface_normal_diameter_mm=(
-                    reference_measurement.surface_normal_diameter_px
-                    * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.surface_normal_diameter_px is not None
                     else None
                 ),
             )
