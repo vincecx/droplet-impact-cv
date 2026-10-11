@@ -157,15 +157,57 @@ PARAMETERS = (
               "Position (y-coordinate) of the substrate line at the image center. Larger values move it downward. Auto uses the detected line.", True),
     Parameter("surface_angle_deg", "Surface tilt (deg)", -45, 45, 0.1,
               "Tilt of the substrate line. Positive values rotate it clockwise. Adjust to match the visible substrate; Auto uses the detected tilt.", True),
+    Parameter("mirror_min_depth_px", "Min mirror depth (px)", 0, 500, 1,
+              "Minimum distance a mirror calibration candidate must extend below the coarse substrate line. Lower values allow shallower reflections; Auto reflection mode also uses this check."),
 )
 
 PARAMETER_GROUPS = (
     ("Experiment and scale", ("fps", "pixel_size_mm_per_px")),
-    ("Substrate and width measurement", ("calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px")),
+    ("Substrate and width measurement", ("calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px", "mirror_min_depth_px")),
     ("Liquid detection", ("strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
     ("Drop selection and outline cleanup", ("min_droplet_area_px2", "min_contact_px", "morphology_radius_px")),
 )
 STATUS_COLORS = {"busy": "#a66b00", "ready": "#16803c", "error": "#b42318", "idle": "#526071"}
+
+
+@dataclass
+class PreviewViewport:
+    zoom: float = 1.0
+    # Visible center in normalized image coordinates, retained across frames.
+    center_x: float = 0.5
+    center_y: float = 0.5
+
+    def transform(self, shape, width, height):
+        image_height, image_width = shape[:2]
+        scale = min(width / image_width, height / image_height) * self.zoom
+        return scale, width / 2 - self.center_x * image_width * scale, height / 2 - self.center_y * image_height * scale
+
+    def image_point(self, x, y, shape, width, height):
+        scale, left, top = self.transform(shape, width, height)
+        ix, iy = (x - left) / scale, (y - top) / scale
+        if 0 <= ix <= shape[1] - 1 and 0 <= iy <= shape[0] - 1:
+            return ix, iy
+        return None
+
+    def zoom_at(self, x, y, factor, shape, width, height):
+        point = self.image_point(x, y, shape, width, height)
+        if point is None:
+            return
+        self.zoom = min(32.0, max(0.25, self.zoom * factor))
+        scale, _, _ = self.transform(shape, width, height)
+        self.center_x = (point[0] - (x - width / 2) / scale) / shape[1]
+        self.center_y = (point[1] - (y - height / 2) / scale) / shape[0]
+
+
+def surface_values_from_points(points, width):
+    (x1, y1), (x2, y2) = points
+    if abs(x2 - x1) < 1e-6:
+        raise ValueError("Choose two points with different x coordinates.")
+    slope = (y2 - y1) / (x2 - x1)
+    center_y = y1 + slope * ((width - 1) / 2 - x1)
+    if center_y < 0:
+        raise ValueError("The surface line must have a non-negative center y.")
+    return round(center_y), math.degrees(math.atan(slope))
 
 
 class CollapsibleGroup(ttk.Frame):
@@ -212,7 +254,9 @@ class ParameterControl(ttk.Frame):
                             command=self._auto_changed).pack(side="right")
         row = ttk.Frame(self)
         row.pack(fill="x")
-        self.slider = ttk.Scale(row, from_=spec.low, to=spec.high, command=self._slide)
+        self.slider_value = tk.DoubleVar(value=spec.low)
+        self.slider = ttk.Scale(row, from_=spec.low, to=spec.high,
+                                variable=self.slider_value, command=self._slide)
         self.slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.entry = ttk.Entry(row, textvariable=self.value, width=10)
         self.entry.pack(side="right")
@@ -232,7 +276,8 @@ class ParameterControl(ttk.Frame):
         display = resolved if value is None else value
         # Preserve configured values even beyond the suggested slider range.
         self.slider.configure(from_=min(self.spec.low, display), to=max(self.spec.high, display))
-        self.slider.set(display)
+        # Scale.set ignores updates while disabled (during loading or Auto).
+        self.slider_value.set(display)
         self.value.set(str(display))
         self.updating = False
         self.valid = True
@@ -267,7 +312,7 @@ class ParameterControl(ttk.Frame):
             if number is not None:
                 self.updating = True
                 self.slider.configure(from_=min(self.spec.low, number), to=max(self.spec.high, number))
-                self.slider.set(number)
+                self.slider_value.set(number)
                 self.updating = False
             self.error.configure(text="")
             self.valid = True
@@ -294,7 +339,7 @@ class ParameterControl(ttk.Frame):
             raise ValueError("Ratio must be <= 1.")
         if self.spec.name in ("surface_y_px", "weak_reach_px", "min_droplet_area_px2",
                               "morphology_radius_px", "surface_band_px", "foreground_depth_px",
-                              "min_contact_px", "calibration_frame"):
+                              "min_contact_px", "calibration_frame", "mirror_min_depth_px"):
             if not number.is_integer():
                 raise ValueError("Enter a whole number.")
             return int(number)
@@ -322,6 +367,11 @@ class DropletApp:
         self.playback_fps = tk.StringVar(value="5")
         self.images = None
         self.photos = []
+        self.viewports = [PreviewViewport(), PreviewViewport()]
+        self.selecting_surface = False
+        self.surface_points = []
+        self.selection_frame_index = None
+        self.displayed_frame_index = None
         self.controls = {}
         self.status = tk.StringVar(value="Choose one folder to start.")
         self.folder = tk.StringVar(value="No folder selected")
@@ -395,6 +445,11 @@ class DropletApp:
             group = CollapsibleGroup(self.parameter_panel, title)
             group.pack(fill="x", padx=(0, 10))
             self.groups[title] = group
+            if title == "Substrate and width measurement":
+                self.select_surface_button = ttk.Button(
+                    group.body, text="Select surface line manually", command=self.start_surface_selection,
+                )
+                self.select_surface_button.pack(fill="x", pady=(0, 8))
             for name in names:
                 control = ParameterControl(group.body, specs[name], self.schedule_preview)
                 control.pack(fill="x")
@@ -426,9 +481,23 @@ class DropletApp:
             pane = ttk.LabelFrame(self.preview_panel, text=title, padding=4)
             pane.grid(row=0, column=index, sticky="nsew", padx=4)
             self.preview_panel.columnconfigure(index, weight=1, uniform="preview")
-            label = ttk.Label(pane, text="No image", anchor="center")
+            label = tk.Canvas(pane, width=1, height=1, highlightthickness=0, background="#20252b")
             label.pack(fill="both", expand=True)
+            label.bind("<Configure>", lambda _: self.draw_images())
+            label.bind("<MouseWheel>", lambda event, i=index: self.zoom_image(event, i))
+            label.bind("<Button-4>", lambda event, i=index: self.zoom_image(event, i, 1))
+            label.bind("<Button-5>", lambda event, i=index: self.zoom_image(event, i, -1))
+            ttk.Button(label, text="Reset size", command=lambda i=index: self.reset_image_size(i)).place(relx=1, x=-6, y=6, anchor="ne")
             self.preview_labels.append(label)
+        self.preview_labels[0].bind("<Button-1>", self.select_surface_point)
+        self.surface_selection_panel = ttk.Frame(self.preview_labels[0], padding=6)
+        self.surface_hint = tk.StringVar()
+        responsive_label(self.surface_selection_panel, textvariable=self.surface_hint).pack(fill="x")
+        row = ttk.Frame(self.surface_selection_panel)
+        row.pack(fill="x", pady=(4, 0))
+        self.surface_confirm = ttk.Button(row, text="Confirm", command=self.confirm_surface_selection)
+        self.surface_confirm.pack(side="left")
+        ttk.Button(row, text="Reselect", command=self.reselect_surface).pack(side="left", padx=6)
         self.preview_panel.rowconfigure(0, weight=1)
         self.preview_panel.bind("<Configure>", lambda _: self.draw_images())
         ttk.Label(right, textvariable=self.frame_text).pack(anchor="w", pady=(8, 0))
@@ -580,6 +649,9 @@ class DropletApp:
         if not folder:
             return
         self.pause()
+        self.end_surface_selection()
+        self.viewports = [PreviewViewport(), PreviewViewport()]
+        self.displayed_frame_index = None
         self.generation += 1
         generation = self.generation
         self.session = None
@@ -620,7 +692,7 @@ class DropletApp:
         )
 
     def _update_process_state(self):
-        ready = self.preview_ready and self.session is not None and not self.processing
+        ready = self.preview_ready and self.session is not None and not self.processing and not self.selecting_surface
         if ready:
             try:
                 self.batch_config()
@@ -695,6 +767,7 @@ class DropletApp:
         self.schedule_preview()
 
     def reset_parameters(self):
+        self.end_surface_selection()
         self._set_controls()
         self.schedule_preview()
 
@@ -703,6 +776,8 @@ class DropletApp:
             return
         index = min(len(self.session.prepared.files) - 1, max(0, round(float(value))))
         number = frame_number_from_filename(self.session.prepared.files[index])
+        if self.selecting_surface and index != self.selection_frame_index:
+            self.reselect_surface()
         self.frame_text.set(f"Frame: {number} ({index + 1} / {len(self.session.prepared.files)})")
         self.schedule_preview()
 
@@ -738,28 +813,114 @@ class DropletApp:
         overrides = self.overrides()
         self.preview_started = time.monotonic()
         index = min(len(self.session.prepared.files) - 1, max(0, round(self.frame_slider.get())))
+        self.requested_preview_index = index
         session = self.session
         self.preview_future = self._submit("preview", self.generation,
                                            lambda: session.preview(index, overrides))
+
+    def zoom_image(self, event, index, direction=None):
+        if self.images is not None:
+            canvas = self.preview_labels[index]
+            delta = direction if direction is not None else event.delta / 120
+            self.viewports[index].zoom_at(
+                event.x, event.y, 1.2 ** max(-4, min(4, delta)), self.images[index].shape,
+                max(1, canvas.winfo_width()), max(1, canvas.winfo_height()),
+            )
+            self.draw_images()
+        return "break"
+
+    def reset_image_size(self, index):
+        self.viewports[index] = PreviewViewport()
+        self.draw_images()
+
+    def start_surface_selection(self):
+        if self.session is None or self.processing or self.images is None:
+            return
+        self.pause()
+        self.selecting_surface = True
+        self.surface_selection_panel.place(relx=0, rely=1, relwidth=1, anchor="sw")
+        self.preview_labels[0].configure(cursor="crosshair")
+        self.reselect_surface()
+        self._update_process_state()
+
+    def reselect_surface(self):
+        self.surface_points = []
+        self.selection_frame_index = None
+        self.surface_hint.set("Select two points in Before Processing. You can change frame or zoom.")
+        self.surface_confirm.configure(state="disabled")
+        self.draw_images()
+
+    def end_surface_selection(self):
+        self.selecting_surface = False
+        self.surface_points = []
+        self.selection_frame_index = None
+        self.surface_selection_panel.place_forget()
+        self.preview_labels[0].configure(cursor="")
+        self.draw_images()
+
+    def select_surface_point(self, event):
+        if not self.selecting_surface or not self.preview_ready or len(self.surface_points) == 2:
+            return
+        canvas = self.preview_labels[0]
+        point = self.viewports[0].image_point(
+            event.x, event.y, self.images[0].shape, max(1, canvas.winfo_width()), max(1, canvas.winfo_height()),
+        )
+        if point is None:
+            return
+        self.pause()
+        self.selection_frame_index = self.displayed_frame_index
+        self.surface_points.append(point)
+        self.surface_hint.set("Select the second point." if len(self.surface_points) == 1 else "Confirm this line, or reselect the two points.")
+        if len(self.surface_points) == 2:
+            try:
+                surface_values_from_points(self.surface_points, self.images[0].shape[1])
+                self.surface_confirm.configure(state="normal")
+            except ValueError as error:
+                self.surface_hint.set(str(error) + " Reselect the points.")
+        self.draw_images()
+
+    def confirm_surface_selection(self):
+        if (not self.selecting_surface or len(self.surface_points) != 2 or not self.preview_ready
+                or self.selection_frame_index != self.displayed_frame_index):
+            return
+        try:
+            center_y, angle = surface_values_from_points(self.surface_points, self.images[0].shape[1])
+        except ValueError as error:
+            self.surface_hint.set(str(error) + " Reselect the points.")
+            return
+        frame = frame_number_from_filename(self.session.prepared.files[self.selection_frame_index])
+        for name, value in (("calibration_frame", frame), ("surface_y_px", center_y), ("surface_angle_deg", angle)):
+            control = self.controls[name]
+            control.set_value(None if control.auto.get() else value, value, remember=False)
+        self.end_surface_selection()
+        self.schedule_preview()
 
     def draw_images(self):
         self.photos = []
         if self.images is None:
             for label in self.preview_labels:
-                label.configure(image="", text="No image")
+                label.delete("all")
+                label.create_text(max(1, label.winfo_width()) / 2, max(1, label.winfo_height()) / 2,
+                                  text="No image", fill="white")
             return
-        width = max(1, self.preview_panel.winfo_width() // 2 - 24)
-        height = max(1, self.preview_panel.winfo_height() - 40)
-        for label, array in zip(self.preview_labels, self.images):
-            scale = min(width / array.shape[1], height / array.shape[0])
-            resized = cv2.resize(array, (max(1, int(array.shape[1] * scale)),
-                                        max(1, int(array.shape[0] * scale))), interpolation=cv2.INTER_AREA)
+        for index, (label, array) in enumerate(zip(self.preview_labels, self.images)):
+            width, height = max(1, label.winfo_width()), max(1, label.winfo_height())
+            scale, left, top = self.viewports[index].transform(array.shape, width, height)
+            resized = cv2.warpAffine(array, np.array([[scale, 0, left], [0, scale, top]]),
+                                     (width, height), flags=cv2.INTER_LINEAR, borderValue=(32, 37, 43))
             if resized.ndim == 2:
                 resized = cv2.cvtColor(resized, cv2.COLOR_GRAY2RGB)
             header = f"P6\n{resized.shape[1]} {resized.shape[0]}\n255\n".encode("ascii")
             photo = tk.PhotoImage(data=header + resized.tobytes(), format="PPM")
             self.photos.append(photo)
-            label.configure(image=photo, text="")
+            label.delete("all")
+            label.create_image(0, 0, image=photo, anchor="nw")
+            if index == 0 and self.selecting_surface:
+                points = [(left + x * scale, top + y * scale) for x, y in self.surface_points]
+                if len(points) == 2:
+                    label.create_line(*points[0], *points[1], fill="#00e5ff", width=2)
+                for x, y in points:
+                    label.create_oval(x - 4, y - 4, x + 4, y + 4, outline="#00e5ff", width=2)
 
     def _lock_parameters(self, locked: bool):
         def walk(widget):
@@ -776,7 +937,7 @@ class DropletApp:
             self.reflection_combo.configure(state="readonly")
 
     def process_all(self):
-        if self.session is None or self.processing:
+        if self.session is None or self.processing or self.selecting_surface:
             return
         try:
             config = self.batch_config()
@@ -853,11 +1014,13 @@ class DropletApp:
                         "weak_threshold": prepared.weak_threshold,
                         "surface_y_px": prepared.surface_line.center_y_int(),
                         "surface_angle_deg": prepared.surface_line.angle_deg,
+                        "calibration_frame": frame_number_from_filename(prepared.files[-1]),
                     }
                     for name, value in resolved.items():
                         if self.controls[name].auto.get():
                             self.controls[name].set_value(None, value, remember=False)
                     self.images = before, after
+                    self.displayed_frame_index = self.requested_preview_index
                     self.details.set(details)
                     self.draw_images()
                     self.preview_ready = True

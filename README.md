@@ -16,6 +16,8 @@ uv sync
 
 ### Fully automatic CLI mode
 
+An experiment-specific command typically looks like this:
+
 ```bash
 uv run droplet-impact-cv path/to/image_sequences \
   --fps 8000 \
@@ -25,6 +27,8 @@ uv run droplet-impact-cv path/to/image_sequences \
 ```
 
 ### Semi-automatic GUI mode
+
+The GUI requires Python with Tk support (`tkinter`).
 
 ```bash
 uv run droplet-impact-cv-gui
@@ -37,12 +41,18 @@ when the folder was opened, including their Auto state.
 
 The initial preview is `ref_frame`, or the first frame if no reference is found.
 Preview changes process the selected frame and any required calibration/threshold
-updates, without rerunning the full sequence or writing outputs. Full processing
-uses the current GUI settings for the configured working range.
+updates, without rerunning the full sequence or writing outputs. Use the mouse
+wheel over either preview to zoom around the cursor. Full processing uses the
+current GUI settings for the configured working range.
+
+**Select surface line manually** in the substrate parameter group lets you click
+two points in the preview to select surface line. This updates calibration frame,
+surface center y, and surface tilt, with Auto checkbox unchanged. Note that values
+with Auto enabled could be subsequently re-updated by the normal automatic
+calculation.
 
 Playback speed (default 5 fps) is separate from camera `fps`. Playback waits for
 each frame to finish processing if the requested speed cannot be reached.
-The GUI requires Python with Tk support (`tkinter`).
 
 ### Processing rules
 
@@ -81,12 +91,13 @@ program defaults**. Example:
 | `--pixel-size-mm-per-px` | `0.00711883341` | Physical length represented by one pixel. |
 | `--calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
+| `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
 | `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
 | `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
 | `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
 | `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
 | `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
-| `--weak-threshold-ratio` | `0.25` | Weak/strong threshold ratio when no explicit weak threshold is set. |
+| `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
 | `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |
 | `--min-droplet-area-px2` | `250` | Ignore detected objects smaller than this area. |
 | `--morphology-radius-px` | `3` | Cleanup size for closing gaps and removing small specks. |

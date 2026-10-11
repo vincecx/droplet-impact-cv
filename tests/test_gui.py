@@ -7,6 +7,7 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -14,10 +15,34 @@ import tifffile
 
 from droplet_impact_cv.analysis import analyze_sequence
 from droplet_impact_cv.gui import (
-    PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, load_folder_config, resolve_output_config,
+    PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, PreviewViewport,
+    load_folder_config, resolve_output_config, surface_values_from_points,
 )
 from droplet_impact_cv.cli import default_output_dir
 from droplet_impact_cv.imaging import read_image
+
+
+class PreviewGeometryTests(unittest.TestCase):
+    def test_zoom_keeps_cursor_image_position_and_ignores_letterbox(self):
+        viewport = PreviewViewport()
+        shape = (120, 140)
+        point = viewport.image_point(300, 180, shape, 560, 400)
+        viewport.zoom_at(300, 180, 2, shape, 560, 400)
+        np.testing.assert_allclose(viewport.image_point(300, 180, shape, 560, 400), point)
+        viewport.zoom_at(300, 180, 0.5, shape, 560, 400)
+        self.assertAlmostEqual(viewport.center_x, 0.5)
+        self.assertAlmostEqual(viewport.center_y, 0.5)
+        viewport.zoom_at(0, 0, 2, shape, 560, 400)
+        self.assertEqual(viewport.zoom, 1)
+
+    def test_surface_center_and_clockwise_tilt_are_independent_of_point_order(self):
+        points = [(20, 40), (80, 46)]
+        values = surface_values_from_points(points, 101)
+        self.assertEqual(values[0], 43)
+        self.assertAlmostEqual(values[1], np.degrees(np.arctan(0.1)))
+        self.assertEqual(surface_values_from_points(points[::-1], 101), values)
+        with self.assertRaises(ValueError):
+            surface_values_from_points([(20, 40), (20, 60)], 101)
 
 
 class PreviewTests(unittest.TestCase):
@@ -152,6 +177,21 @@ class GuiControlTests(unittest.TestCase):
         self.root.update_idletasks()
         self.addCleanup(self.root.destroy)
 
+    def test_disabled_slider_tracks_loaded_auto_values_and_reset(self):
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        control = ParameterControl(self.root, spec, lambda: None)
+        control.slider.configure(state="disabled")
+        control.set_value(None, 1500.0)
+        self.assertEqual(control.slider.get(), 1500.0)
+        self.assertEqual(str(control.slider["state"]), "disabled")
+        control.set_value(None, 2200.0, remember=False)
+        self.assertEqual(control.slider.get(), 2200.0)
+        control.reset_value()
+        self.assertEqual(control.slider.get(), 1500.0)
+        control.set_value(2000.0, 2000.0, remember=False)
+        self.assertEqual(control.slider.get(), 2000.0)
+        self.assertEqual(str(control.slider["state"]), "normal")
+
     def test_initial_values_preserve_precision_and_auto(self):
         spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
         control = ParameterControl(self.root, spec, lambda: None)
@@ -214,6 +254,60 @@ class GuiControlTests(unittest.TestCase):
 
 
 class GuiWorkflowTests(unittest.TestCase):
+    def test_manual_surface_selection_zoom_frame_switch_and_auto_preservation(self):
+        PreviewTests.setUp(self)
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        root.withdraw()
+        app = DropletApp(root)
+        self.addCleanup(app.close)
+
+        def pump():
+            deadline = time.monotonic() + 10
+            while not app.preview_ready:
+                root.update()
+                if time.monotonic() > deadline:
+                    self.fail(app.status.get())
+                time.sleep(0.01)
+            root.update()
+
+        def click(x, y):
+            canvas = app.preview_labels[0]
+            scale, left, top = app.viewports[0].transform(
+                app.images[0].shape, max(1, canvas.winfo_width()), max(1, canvas.winfo_height()),
+            )
+            app.select_surface_point(SimpleNamespace(x=left + x * scale, y=top + y * scale))
+
+        with patch("droplet_impact_cv.gui.filedialog.askdirectory", return_value=str(self.folder)):
+            app.choose_folder()
+        pump()
+        app.start_surface_selection()
+        click(20, 70)
+        app.navigate_frame("last")
+        self.assertEqual(app.surface_points, [])
+        pump()
+        app.controls["surface_angle_deg"].set_value(None, 0, remember=False)
+        app.controls["calibration_frame"].set_value(4, 4, remember=False)
+        app.viewports[0].zoom_at(0.5, 0.5, 2, app.images[0].shape, 1, 1)
+        click(20, 70)
+        click(100, 78)
+        self.assertEqual(len(app.preview_labels[0].find_all()), 4)  # Image, line, two points.
+        self.assertEqual(str(app.process["state"]), "disabled")
+        app.confirm_surface_selection()
+        self.assertEqual(app.controls["calibration_frame"].get_value(), 5)
+        self.assertEqual(app.controls["surface_y_px"].get_value(), 75)
+        self.assertAlmostEqual(float(app.controls["surface_angle_deg"].value.get()), np.degrees(np.arctan(0.1)))
+        self.assertTrue(app.controls["surface_angle_deg"].auto.get())
+        self.assertFalse(app.controls["surface_y_px"].auto.get())
+        self.assertFalse(app.controls["calibration_frame"].auto.get())
+        self.assertFalse(app.selecting_surface)
+        pump()
+        self.assertEqual(float(app.controls["surface_angle_deg"].value.get()), app.session.prepared.surface_line.angle_deg)
+        app.reset_image_size(0)
+        self.assertEqual(app.viewports[0], PreviewViewport())
+
     def test_load_preview_scrub_edit_reset_and_process(self):
         PreviewTests.setUp(self)
         try:
@@ -305,6 +399,9 @@ class GuiWorkflowTests(unittest.TestCase):
             self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["ready"])
             self.assertEqual(app.playback_fps.get(), "5")
             self.assertEqual(app.controls["fps"].get_value(), 4000.0)
+            for name, control in app.controls.items():
+                with self.subTest(parameter=name):
+                    self.assertAlmostEqual(control.slider.get(), float(control.value.get()))
             group = app.groups["Experiment and scale"]
             group.header.invoke()
             self.assertFalse(group.expanded)

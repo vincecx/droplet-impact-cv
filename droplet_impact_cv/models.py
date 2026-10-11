@@ -14,7 +14,8 @@ DEFAULT_MIN_STRONG_THRESHOLD = 1500.0
 DEFAULT_THRESHOLD_SAMPLE_FRAMES = 8
 DEFAULT_SURFACE_BAND_PX = 3
 DEFAULT_WEAK_REACH_PX = 40
-DEFAULT_WEAK_THRESHOLD_RATIO = 0.25
+DEFAULT_WEAK_THRESHOLD_RATIO = 0.3
+DEFAULT_MIRROR_MIN_DEPTH_PX = 50
 REFLECTION_MODES = ("auto", "mirror", "none")
 
 
@@ -28,6 +29,7 @@ class AnalysisConfig:
     calibration_frame: int | None = None
     surface_angle_deg: float | None = None
     reflection_mode: str = "auto"
+    mirror_min_depth_px: int = DEFAULT_MIRROR_MIN_DEPTH_PX
     strong_threshold: float | None = None
     weak_threshold: float | None = None
     weak_threshold_ratio: float = DEFAULT_WEAK_THRESHOLD_RATIO

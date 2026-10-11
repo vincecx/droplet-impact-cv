@@ -688,7 +688,7 @@ def select_calibration_component(
         above_surface = int(component[:coarse_surface_y].sum())
         if below_surface < config.min_droplet_area_px2 or above_surface < config.min_droplet_area_px2:
             continue
-        if y_max < coarse_surface_y + 50:
+        if y_max < coarse_surface_y + config.mirror_min_depth_px:
             continue
 
         score = area + 20 * below_surface + 100 * vertical_span + (x_max - x_min + 1)

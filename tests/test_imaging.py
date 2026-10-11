@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -31,6 +32,16 @@ from droplet_impact_cv.models import (
 
 
 class BackgroundTests(unittest.TestCase):
+    def test_mirror_candidate_depth_uses_configured_cutoff_inclusively(self):
+        mask = np.zeros((120, 100), dtype=bool)
+        mask[20:76, 30:70] = True
+        config = AnalysisConfig(input_dir=Path("input"), output_csv=Path("out.csv"))
+        self.assertIsNone(select_calibration_component(mask, 50, config))
+        selected = select_calibration_component(mask, 50, replace(config, mirror_min_depth_px=25))
+        self.assertIsNotNone(selected)
+        np.testing.assert_array_equal(selected[0], mask)
+        self.assertIsNone(select_calibration_component(mask, 50, replace(config, mirror_min_depth_px=26)))
+
     def test_background_uses_only_the_smallest_numbered_frame(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)

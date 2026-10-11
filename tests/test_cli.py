@@ -16,6 +16,18 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_mirror_depth_folder_config_cli_override_and_defaults(self):
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            defaults = config_from_args(parse_args([str(folder)]))
+            self.assertEqual(defaults.mirror_min_depth_px, 50)
+            self.assertEqual(defaults.weak_threshold_ratio, 0.3)
+            (folder / "cv_config.txt").write_text("--mirror-min-depth-px 25\n", encoding="utf-8")
+            self.assertEqual(config_from_args(parse_args([str(folder)])).mirror_min_depth_px, 25)
+            self.assertEqual(config_from_args(parse_args([str(folder), "--mirror-min-depth-px", "0"])).mirror_min_depth_px, 0)
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                parse_args([str(folder), "--mirror-min-depth-px", "-1"])
+
     def test_cli_summary_reports_both_reference_methods(self) -> None:
         measurement = FrameMeasurement(
             frame_number=5, filename="frame000005.tif", time_ms=0.0,

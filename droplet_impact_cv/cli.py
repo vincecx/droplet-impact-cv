@@ -10,6 +10,7 @@ from .analysis import analyze_sequence
 from .models import (
     DEFAULT_FPS,
     DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_MIRROR_MIN_DEPTH_PX,
     DEFAULT_PIXEL_SIZE_MM_PER_PX,
     DEFAULT_SURFACE_BAND_PX,
     DEFAULT_WEAK_REACH_PX,
@@ -185,8 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WEAK_THRESHOLD_RATIO,
         help=(
             "Weak threshold as a fraction of the effective strong threshold, "
-            "used when --weak-threshold is not given. Default: 0.25"
+            "used when --weak-threshold is not given. Default: 0.3"
         ),
+    )
+    parser.add_argument(
+        "--mirror-min-depth-px",
+        type=nonnegative_int,
+        default=DEFAULT_MIRROR_MIN_DEPTH_PX,
+        metavar="DISTANCE",
+        help="Minimum mirror candidate depth below the coarse surface line in px. Default: 50",
     )
     parser.add_argument(
         "--weak-reach-px",
@@ -339,6 +347,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         calibration_frame=args.calibration_frame,
         surface_angle_deg=args.surface_angle_deg,
         reflection_mode=args.reflection_mode,
+        mirror_min_depth_px=args.mirror_min_depth_px,
         strong_threshold=args.strong_threshold,
         weak_threshold=args.weak_threshold,
         weak_threshold_ratio=args.weak_threshold_ratio,
