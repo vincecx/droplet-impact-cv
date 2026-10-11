@@ -8,13 +8,13 @@ import numpy as np
 
 
 DEFAULT_FPS = 8000.0
-DEFAULT_PIXEL_SIZE_MM = 0.00711883341
+DEFAULT_PIXEL_SIZE_MM_PER_PX = 0.00711883341
 DEFAULT_SURFACE_ANGLE_DEG = -0.6
-DEFAULT_MIN_FOREGROUND_DELTA = 1500.0
+DEFAULT_MIN_STRONG_THRESHOLD = 1500.0
 DEFAULT_THRESHOLD_SAMPLE_FRAMES = 8
 DEFAULT_SURFACE_BAND_PX = 3
-DEFAULT_WEAK_PROPAGATION_PX = 40
-DEFAULT_WEAK_THRESHOLD_FRACTION = 0.25
+DEFAULT_WEAK_REACH_PX = 40
+DEFAULT_WEAK_THRESHOLD_RATIO = 0.25
 REFLECTION_MODES = ("auto", "mirror", "none")
 
 
@@ -23,29 +23,29 @@ class AnalysisConfig:
     input_dir: Path
     output_csv: Path
     fps: float = DEFAULT_FPS
-    pixel_size_mm: float = DEFAULT_PIXEL_SIZE_MM
-    surface_y: int | None = None
-    surface_frame: int | None = None
+    pixel_size_mm_per_px: float = DEFAULT_PIXEL_SIZE_MM_PER_PX
+    surface_y_px: int | None = None
+    calibration_frame: int | None = None
     surface_angle_deg: float | None = None
     reflection_mode: str = "auto"
-    threshold: float | None = None
+    strong_threshold: float | None = None
     weak_threshold: float | None = None
-    weak_threshold_fraction: float = DEFAULT_WEAK_THRESHOLD_FRACTION
-    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX
-    min_foreground_delta: float = DEFAULT_MIN_FOREGROUND_DELTA
-    min_area_px: int = 250
+    weak_threshold_ratio: float = DEFAULT_WEAK_THRESHOLD_RATIO
+    weak_reach_px: int = DEFAULT_WEAK_REACH_PX
+    min_strong_threshold: float = DEFAULT_MIN_STRONG_THRESHOLD
+    min_droplet_area_px2: int = 250
     morphology_radius_px: int = 3
     surface_search_start_px: int = 50
     surface_drop_delta: float = 100.0
     surface_band_px: int = DEFAULT_SURFACE_BAND_PX
     hydrophobic: bool = False
-    measure_below_surface_px: int = 220
-    min_touch_pixels: int = 30
+    foreground_depth_px: int = 220
+    min_contact_px: int = 30
     min_impact_width_px: int = 30
     include_pre_impact: bool = False
     time_zero: str = "impact"
     debug_dir: Path | None = Path("outputs/debug_overlays")
-    debug_every: int = 1
+    debug_interval: int = 1
     start_frame: int | None = None
     end_frame: int | None = None
 
@@ -55,42 +55,45 @@ class FrameMeasurement:
     frame_number: int
     filename: str
     time_ms: float
-    spreading_diameter_px: float
-    spreading_diameter_mm: float
-    component_area_px: int
-    surface_y: int
+    d_spread_px: float
+    d_spread_mm: float
+    droplet_area_px2: int
+    surface_y_px: int
     impact_frame: int | None
     fps: float
-    pixel_size_mm: float
-    surface_frame: int | None
-    contact_line_diameter_px: float | None = None
-    contact_line_diameter_mm: float | None = None
-    rim_to_rim_diameter_px: float | None = None
-    rim_to_rim_diameter_mm: float | None = None
-    reference_frame: int | None = None
-    initial_equivalent_diameter_px: float | None = None
-    initial_equivalent_diameter_mm: float | None = None
-    initial_surface_parallel_diameter_px: float | None = None
-    initial_surface_parallel_diameter_mm: float | None = None
-    initial_surface_normal_diameter_px: float | None = None
-    initial_surface_normal_diameter_mm: float | None = None
-    surface_clearance_px: float | None = None
-    surface_clearance_mm: float | None = None
+    pixel_size_mm_per_px: float
+    calibration_frame: int | None
+    d_contact_px: float | None = None
+    d_contact_mm: float | None = None
+    d_rim_px: float | None = None
+    d_rim_mm: float | None = None
+    ref_frame: int | None = None
+    ref_d_eq_volume_px: float | None = None
+    ref_d_eq_volume_mm: float | None = None
+    ref_d_eq_area_px: float | None = None
+    ref_d_eq_area_mm: float | None = None
+    ref_d_parallel_px: float | None = None
+    ref_d_parallel_mm: float | None = None
+    ref_d_normal_px: float | None = None
+    ref_d_normal_mm: float | None = None
+    ref_clearance_px: float | None = None
+    ref_clearance_mm: float | None = None
 
 
 @dataclass(frozen=True)
 class ComponentMeasurement:
-    spreading_diameter_px: float
-    area_px: int
+    d_spread_px: float
+    area_px2: int
     bbox: tuple[int, int, int, int] | None
     mask: np.ndarray
     contact_bbox: tuple[int, int, int, int] | None = None
     rim_bbox: tuple[int, int, int, int] | None = None
-    contact_line_diameter_px: float | None = None
-    rim_to_rim_diameter_px: float | None = None
-    surface_parallel_diameter_px: float | None = None
-    surface_normal_diameter_px: float | None = None
-    equivalent_diameter_px: float | None = None
+    d_contact_px: float | None = None
+    d_rim_px: float | None = None
+    d_parallel_px: float | None = None
+    d_normal_px: float | None = None
+    d_eq_volume_px: float | None = None
+    d_eq_area_px: float | None = None
     surface_clearance_px: float | None = None
     surface_parallel_line: tuple[int, int, int, int] | None = None
     surface_normal_line: tuple[int, int, int, int] | None = None

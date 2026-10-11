@@ -1,19 +1,37 @@
 from __future__ import annotations
 
 import unittest
-from contextlib import redirect_stderr
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-from droplet_impact_cv.cli import build_parser, config_from_args, parse_args
+from droplet_impact_cv.cli import build_parser, config_from_args, main, parse_args
 from droplet_impact_cv.models import (
-    DEFAULT_MIN_FOREGROUND_DELTA,
-    DEFAULT_PIXEL_SIZE_MM,
+    FrameMeasurement,
+    DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_PIXEL_SIZE_MM_PER_PX,
 )
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_cli_summary_reports_both_reference_methods(self) -> None:
+        measurement = FrameMeasurement(
+            frame_number=5, filename="frame000005.tif", time_ms=0.0,
+            d_spread_px=0.0, d_spread_mm=0.0, droplet_area_px2=1200,
+            surface_y_px=80, impact_frame=None, fps=8000.0,
+            pixel_size_mm_per_px=0.01, calibration_frame=None,
+            ref_frame=4, ref_d_eq_volume_mm=0.36,
+            ref_d_eq_area_mm=0.39,
+        )
+        output = StringIO()
+        with patch("droplet_impact_cv.cli.analyze_sequence", return_value=[measurement]), \
+                patch("droplet_impact_cv.cli.write_csv"), redirect_stdout(output):
+            main(["--include-pre-impact"])
+        self.assertIn("Ref d_eq_volume: 0.360000 mm at frame 4", output.getvalue())
+        self.assertIn("Ref d_eq_area: 0.390000 mm at frame 4", output.getvalue())
+
     def test_input_folder_config_overrides_code_defaults(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)
@@ -29,10 +47,10 @@ class CliConfigTests(unittest.TestCase):
             config = config_from_args(parse_args([str(input_dir)]))
 
         self.assertEqual(config.fps, 4000.0)
-        self.assertEqual(config.pixel_size_mm, 0.01682736321)
-        self.assertEqual(config.surface_frame, 9105)
+        self.assertEqual(config.pixel_size_mm_per_px, 0.01682736321)
+        self.assertEqual(config.calibration_frame, 9105)
         self.assertEqual(config.reflection_mode, "none")
-        self.assertEqual(config.min_foreground_delta, DEFAULT_MIN_FOREGROUND_DELTA)
+        self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
 
     def test_command_line_overrides_input_folder_config(self) -> None:
         with TemporaryDirectory() as temporary_dir:
@@ -56,7 +74,7 @@ class CliConfigTests(unittest.TestCase):
             )
 
         self.assertEqual(config.fps, 2000.0)
-        self.assertEqual(config.pixel_size_mm, 0.01682736321)
+        self.assertEqual(config.pixel_size_mm_per_px, 0.01682736321)
         self.assertFalse(config.include_pre_impact)
 
     def test_missing_config_file_uses_code_defaults(self) -> None:
@@ -64,7 +82,7 @@ class CliConfigTests(unittest.TestCase):
             config = config_from_args(parse_args([temporary_dir]))
 
         self.assertEqual(config.fps, 8000.0)
-        self.assertEqual(config.pixel_size_mm, DEFAULT_PIXEL_SIZE_MM)
+        self.assertEqual(config.pixel_size_mm_per_px, DEFAULT_PIXEL_SIZE_MM_PER_PX)
         self.assertFalse(config.include_pre_impact)
 
     def test_input_specific_default_output_paths(self) -> None:
@@ -94,8 +112,8 @@ class CliConfigTests(unittest.TestCase):
 
     def test_default_foreground_delta_rejects_weak_shadow(self) -> None:
         config = config_from_args(build_parser().parse_args([]))
-        self.assertEqual(config.min_foreground_delta, DEFAULT_MIN_FOREGROUND_DELTA)
-        self.assertEqual(config.min_foreground_delta, 1500.0)
+        self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
+        self.assertEqual(config.min_strong_threshold, 1500.0)
 
     def test_surface_angle_is_automatic_unless_explicitly_overridden(self) -> None:
         parser = build_parser()
@@ -125,11 +143,11 @@ class CliConfigTests(unittest.TestCase):
                     "32",
                     "--min-strong-threshold",
                     "1200",
-                    "--min-droplet-area-px",
+                    "--min-droplet-area-px2",
                     "300",
                     "--foreground-depth-px",
                     "200",
-                    "--min-contact-pixels",
+                    "--min-contact-px",
                     "25",
                     "--debug-interval",
                     "5",
@@ -137,21 +155,33 @@ class CliConfigTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(config.surface_y, 800)
-        self.assertEqual(config.threshold, 1800.0)
+        self.assertEqual(config.surface_y_px, 800)
+        self.assertEqual(config.strong_threshold, 1800.0)
         self.assertEqual(config.weak_threshold, 450.0)
-        self.assertEqual(config.weak_threshold_fraction, 0.3)
-        self.assertEqual(config.weak_propagation_px, 32)
-        self.assertEqual(config.min_foreground_delta, 1200.0)
-        self.assertEqual(config.min_area_px, 300)
-        self.assertEqual(config.measure_below_surface_px, 200)
-        self.assertEqual(config.min_touch_pixels, 25)
-        self.assertEqual(config.debug_every, 5)
+        self.assertEqual(config.weak_threshold_ratio, 0.3)
+        self.assertEqual(config.weak_reach_px, 32)
+        self.assertEqual(config.min_strong_threshold, 1200.0)
+        self.assertEqual(config.min_droplet_area_px2, 300)
+        self.assertEqual(config.foreground_depth_px, 200)
+        self.assertEqual(config.min_contact_px, 25)
+        self.assertEqual(config.debug_interval, 5)
+
+    def test_canonical_unit_names_and_legacy_aliases_match(self) -> None:
+        parser = build_parser()
+        canonical = config_from_args(parser.parse_args([
+            "--pixel-size-mm-per-px", "0.01", "--min-droplet-area-px2", "400",
+            "--min-contact-px", "20", "--hydrophobic", "1",
+        ]))
+        legacy = config_from_args(parser.parse_args([
+            "--pixel-size-mm", "0.01", "--min-droplet-area-px", "400",
+            "--min-contact-pixels", "20", "--HO", "1",
+        ]))
+        self.assertEqual(canonical, legacy)
 
     def test_debug_interval_defaults_to_one(self) -> None:
         config = config_from_args(build_parser().parse_args([]))
 
-        self.assertEqual(config.debug_every, 1)
+        self.assertEqual(config.debug_interval, 1)
 
     def test_hydrophobic_option_can_be_loaded_from_config_or_overridden_by_cli(self) -> None:
         with TemporaryDirectory() as temporary_dir:

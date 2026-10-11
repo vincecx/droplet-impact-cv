@@ -35,10 +35,10 @@ def write_debug_overlay(
     surface_line: SurfaceLine,
     bbox: tuple[int, int, int, int] | None,
     frame_number: int,
-    spreading_diameter_mm: float,
+    d_spread_mm: float,
     rim_bbox: tuple[int, int, int, int] | None = None,
-    contact_line_diameter_mm: float | None = None,
-    rim_to_rim_diameter_mm: float | None = None,
+    d_contact_mm: float | None = None,
+    d_rim_mm: float | None = None,
 ) -> None:
     lo, hi = np.percentile(image, [0.5, 99.5])
     gray = np.clip((image - lo) / max(1.0, hi - lo) * 255.0, 0, 255).astype(np.uint8)
@@ -56,10 +56,10 @@ def write_debug_overlay(
     if bbox is not None:
         x0, y0, x1, y1 = bbox
         cv2.line(overlay, (x0, y0), (x1, y1), CONTACT_LINE_COLOR, 2)
-    if contact_line_diameter_mm is not None:
+    if d_contact_mm is not None:
         cv2.putText(
             overlay,
-            f"contact={contact_line_diameter_mm:.4f} mm",
+            f"d_contact={d_contact_mm:.4f} mm",
             (12, 28),
             DEBUG_FONT,
             DEBUG_FONT_SCALE,
@@ -71,13 +71,13 @@ def write_debug_overlay(
         x0, y0, x1, y1 = rim_bbox
         cv2.line(overlay, (x0, y0), (x1, y1), RIM_TO_RIM_COLOR, 2)
         rim_label_mm = (
-            rim_to_rim_diameter_mm
-            if rim_to_rim_diameter_mm is not None
-            else spreading_diameter_mm
+            d_rim_mm
+            if d_rim_mm is not None
+            else d_spread_mm
         )
         cv2.putText(
             overlay,
-            f"rim-to-rim={rim_label_mm:.4f} mm",
+            f"d_rim={rim_label_mm:.4f} mm",
             (12, 54),
             DEBUG_FONT,
             DEBUG_FONT_SCALE,

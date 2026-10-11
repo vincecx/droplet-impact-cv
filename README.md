@@ -27,7 +27,7 @@ An experiment-specific command typically looks like this:
 ```bash
 uv run droplet-impact-cv path/to/image_sequences \
   --fps 8000 \
-  --pixel-size-mm 0.00711883341 \
+  --pixel-size-mm-per-px 0.00711883341 \
   --calibration-frame 61 \
   --reflection-mode auto
 ```
@@ -47,7 +47,7 @@ uv run droplet-impact-cv path/to/image_sequences \
 5. Clean the foreground mask, select the gas-side droplet component nearest the
    surface, fill its enclosed interior, and measure the surface-contact span.
 6. Detect impact when the contact-line diameter reaches
-   `--min-impact-width-px`, convert pixels to millimetres and frames to time,
+   `--min-impact-width-px`, convert px to mm and frames to time,
    then write the CSV and selected overlays.
 7. Before impact, define the reference drop size at the first frame where the
    surface-normal clearance of the lower silhouette reaches one half of its
@@ -63,7 +63,7 @@ silhouette provides strong reflection evidence. Setting the mode explicitly is
 recommended.
 
 Surface angles are clockwise from horizontal. Without a calibration frame or
-explicit `--surface-angle-deg`, the fallback is `-0.6` degrees. A manual
+explicit `--surface-angle-deg`, the fallback is `-0.6` deg. A manual
 `--surface-y-px` overrides the calibrated surface-line center.
 
 ### CLI parameter summary
@@ -75,7 +75,7 @@ options, `cv_config.txt`, then program defaults.
 Example of cv_config.txt:
 ```text
 --fps 4000
---pixel-size-mm 0.01682736321
+--pixel-size-mm-per-px 0.01682736321
 --calibration-frame 9105
 --reflection-mode mirror
 ```
@@ -92,7 +92,7 @@ settings most useful when tuning the detected droplet contour.
 | `input_dir` | `sourcedata/example` | Folder containing numbered TIFF/JPEG frames and optional `cv_config.txt`. |
 | `--start-frame`, `--end-frame` | unbounded | Inclusive filename frame-number range; the first selected frame becomes the background. |
 | `--fps` | `8000` | Camera frame rate used to calculate `time_ms`. |
-| `--pixel-size-mm` | `0.00711883341` | Physical length represented by one pixel. |
+| `--pixel-size-mm-per-px` | `0.00711883341` | Physical length represented by one pixel. |
 | `--calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
 | `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
@@ -102,15 +102,15 @@ settings most useful when tuning the detected droplet contour.
 | `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
 | `--weak-threshold-ratio` | `0.25` | Weak/strong threshold ratio when no explicit weak threshold is set. |
 | `--weak-reach-px` | `40` | Maximum distance weak foreground may grow from strong foreground. |
-| `--min-droplet-area-px` | `250` | Reject connected components smaller than this pixel count. |
+| `--min-droplet-area-px2` | `250` | Reject connected components smaller than this pixel count. |
 | `--morphology-radius-px` | `3` | Radius used to close/fill the mask and remove small artifacts. |
 | `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
-| `--HO {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
+| `--hydrophobic {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
 
 Threshold tuning usually starts with `--strong-threshold`. For a faint
 transparent interior, lower `--weak-threshold-ratio` or set `--weak-threshold`
 directly; keep `--weak-reach-px` only as large as needed to bridge the liquid
-interior. If noise forms separate components, tune `--min-droplet-area-px` and
+interior. If noise forms separate components, tune `--min-droplet-area-px2` and
 `--morphology-radius-px` instead.
 
 #### Other parameters
@@ -119,7 +119,7 @@ interior. If noise forms separate components, tune `--min-droplet-area-px` and
 | --- | --- | --- |
 | `-o`, `--output-csv` | `outputs/<input-folder>/spreading_diameter.csv` | CSV output path. |
 | `--foreground-depth-px` | `220` | Foreground ROI depth below the surface. |
-| `--min-contact-pixels` | `30` | Minimum gas-side foreground pixels for the selected droplet. |
+| `--min-contact-px` | `30` | Minimum gas-side foreground px for the selected droplet. |
 | `--min-impact-width-px` | `30` | Contact-line diameter that marks the first impact frame. |
 | `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
 | `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
@@ -134,64 +134,67 @@ CSV is written to `outputs/example/spreading_diameter.csv` and diagnostic
 overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
 choose a different directory for debug overlays.
 
-The reported `spreading_diameter` is the maximum width of the
-detected liquid silhouette within `--surface-band-px` pixels above or below the
+The reported `d_spread` is the maximum width of the
+detected liquid silhouette within `--surface-band-px` px above or below the
 fixed surface line (default: 3): the distance between the outermost points
 where the silhouette enters that band. Frames where the silhouette stays clear
-of the band report a spreading diameter of `0`. With `--HO 1`, it is instead the
+of the band report a spreading diameter of `0`. With `--hydrophobic 1`, it is instead the
 rim-to-rim width of the entire detected droplet silhouette, so lifted droplets
-remain measurable. Regardless of `--HO`, a frame is marked as the impact frame
+remain measurable. Regardless of `--hydrophobic`, a frame is marked as the impact frame
 once its contact-line diameter reaches `--min-impact-width-px` (default: 30).
 
-### Reference equivalent diameter
+### Reference equivalent diameters
 
-The program uses substrate-aligned coordinates: `surface_parallel` is tangent
-to the fixed surface line, while `surface_normal` is perpendicular to it. This
-remains physically meaningful for a tilted substrate; it replaces ambiguous
-image-space “horizontal” and “vertical” names.
+The program uses substrate-aligned coordinates: `parallel` is tangent to the
+fixed surface line, while `normal` is perpendicular to it. For each selected
+silhouette it measures the full projection spans `D_parallel` and `D_normal`.
+The first frame satisfying `surface_clearance ≤ D_eq_volume / 2` is saved as
+`ref_frame`, using the volume-equivalent method for selection.
 
-For every selected pre-impact silhouette it measures the full projection spans
-`D_parallel` and `D_normal`, then calculates
-`D_eq = (D_normal × D_parallel²)^(1/3)`. The first frame satisfying
-`surface_clearance ≤ D_eq / 2` is saved as `reference_frame`. The dimensions
-frozen there are named `initial_equivalent_diameter`,
-`initial_surface_parallel_diameter`, and `initial_surface_normal_diameter`;
-they are repeated on every CSV row. Before that frame, debug overlays contain
-only the source image and surface line; starting at it, they add the liquid
-mask and measurement lines. Overlay labels use the conventional `D0` prefix
-for these initial reference dimensions.
+Both equivalent diameters are measured in that same reference frame:
+
+- `ref_d_eq_volume`: `(D_parallel² × D_normal)^(1/3)`, the equivalent sphere diameter of an axisymmetric ellipsoid with the measured spans.
+- `ref_d_eq_area`: `sqrt(4 × A / pi)`, the equivalent circle diameter of the measured side-view silhouette area `A`.
+
+The area counts px inside the selected, filled droplet contour, including its
+enclosed bright regions. Both methods use the silhouette before surface
+clipping. The area method describes a 2D projection; it does not infer volume.
+Each diameter is exported in px and mm and printed in mm in the CLI summary.
+The reference spans and clearance are also frozen at `ref_frame`, and
+all reference values repeat on every exported row. If no reference frame is
+found, reference columns are empty.
+
+Overlays show the source image, fixed surface line, detected mask, and available
+contact/rim measurement lines. Labels use `d_contact` and `d_rim`.
 
 By default, debug overlays are generated for every frame (use `--debug-interval`
 to change). Note that each run first deletes any frame-numbered overlay PNGs
 already in the target directory, so its contents always reflect a single run's
 calibration.
 
+Parameter names use lowercase snake_case in Python and CSV, and corresponding
+hyphenated names in the CLI. `d` means diameter and `eq` means equivalent;
+`ref_` marks quantities frozen at the reference frame. Unit suffixes are
+`_px`, `_mm`, `_ms`, `_deg`, and `_px2` for area. Pixel size uses `_mm_per_px`;
+`fps` is the camera frame rate.
+
 The CSV columns are:
 
-- `filename`
-- `frame`
-- `time_ms`
-- `spreading_diameter_px`
-- `spreading_diameter_mm`
-- `contact_line_diameter_px`
-- `contact_line_diameter_mm`
-- `rim_to_rim_diameter_px`
-- `rim_to_rim_diameter_mm`
-- `reference_frame`
-- `initial_equivalent_diameter_px`
-- `initial_equivalent_diameter_mm`
-- `initial_surface_parallel_diameter_px`
-- `initial_surface_parallel_diameter_mm`
-- `initial_surface_normal_diameter_px`
-- `initial_surface_normal_diameter_mm`
-- `surface_clearance_px`
-- `surface_clearance_mm`
-- `impact_frame`
-- `surface_y_px`
-- `component_area_px`
-- `fps`
-- `pixel-size-mm`
-- `surface-frame`
+| Columns | Meaning |
+| --- | --- |
+| `filename`, `frame_number`, `time_ms` | Source file, filename frame number, and time. |
+| `d_spread_px`, `d_spread_mm` | Spreading diameter selected by `--hydrophobic`. |
+| `d_contact_px`, `d_contact_mm` | Surface contact-line diameter. |
+| `d_rim_px`, `d_rim_mm` | Rim-to-rim diameter, available in hydrophobic mode. |
+| `ref_frame` | Frame used for both reference equivalent diameters. |
+| `ref_d_eq_volume_px`, `ref_d_eq_volume_mm` | Volume-equivalent reference diameter. |
+| `ref_d_eq_area_px`, `ref_d_eq_area_mm` | Area-equivalent reference diameter. |
+| `ref_d_parallel_px`, `ref_d_parallel_mm` | Reference projection span parallel to the substrate. |
+| `ref_d_normal_px`, `ref_d_normal_mm` | Reference projection span normal to the substrate. |
+| `ref_clearance_px`, `ref_clearance_mm` | Reference lower-contour clearance normal to the substrate. |
+| `impact_frame`, `surface_y_px` | Detected impact frame and fixed surface-line center y coordinate. |
+| `droplet_area_px2` | Current frame's filled gas-side area after surface clipping. |
+| `fps`, `pixel_size_mm_per_px`, `calibration_frame` | Camera and surface calibration metadata. |
 
 By default, `time_ms = 0` at the automatically detected impact frame and
 pre-impact rows are omitted. Use `--include-pre-impact` to keep all frames, or

@@ -9,11 +9,11 @@ from pathlib import Path
 from .analysis import analyze_sequence
 from .models import (
     DEFAULT_FPS,
-    DEFAULT_MIN_FOREGROUND_DELTA,
-    DEFAULT_PIXEL_SIZE_MM,
+    DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_PIXEL_SIZE_MM_PER_PX,
     DEFAULT_SURFACE_BAND_PX,
-    DEFAULT_WEAK_PROPAGATION_PX,
-    DEFAULT_WEAK_THRESHOLD_FRACTION,
+    DEFAULT_WEAK_REACH_PX,
+    DEFAULT_WEAK_THRESHOLD_RATIO,
     REFLECTION_MODES,
     AnalysisConfig,
 )
@@ -112,22 +112,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Camera frame rate in fps. Default: 8000",
     )
     parser.add_argument(
+        "--pixel-size-mm-per-px",
         "--pixel-size-mm",
+        dest="pixel_size_mm_per_px",
         type=positive_float,
-        default=DEFAULT_PIXEL_SIZE_MM,
-        help="Physical length per pixel in mm. Default: 0.00711883341",
+        default=DEFAULT_PIXEL_SIZE_MM_PER_PX,
+        help="Pixel size in mm/px. Default: 0.00711883341",
     )
     parser.add_argument(
         "--surface-y-px",
-        dest="surface_y",
+        dest="surface_y_px",
         type=nonnegative_int,
         metavar="Y",
         default=None,
-        help="Override detected surface y coordinate in pixels.",
+        help="Override detected surface y coordinate in px.",
     )
     parser.add_argument(
         "--calibration-frame",
-        dest="surface_frame",
+        dest="calibration_frame",
         type=nonnegative_int,
         metavar="FRAME",
         default=None,
@@ -150,13 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         help=(
-            "Override surface angle in clockwise degrees. By default the angle is "
+            "Override surface angle in clockwise deg. By default the angle is "
             "detected from --calibration-frame, or -0.6 when no calibration frame is given."
         ),
     )
     parser.add_argument(
         "--strong-threshold",
-        dest="threshold",
+        dest="strong_threshold",
         type=positive_float,
         metavar="VALUE",
         default=None,
@@ -177,10 +179,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--weak-threshold-ratio",
-        dest="weak_threshold_fraction",
+        dest="weak_threshold_ratio",
         type=unit_fraction,
         metavar="RATIO",
-        default=DEFAULT_WEAK_THRESHOLD_FRACTION,
+        default=DEFAULT_WEAK_THRESHOLD_RATIO,
         help=(
             "Weak threshold as a fraction of the effective strong threshold, "
             "used when --weak-threshold is not given. Default: 0.25"
@@ -188,30 +190,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--weak-reach-px",
-        dest="weak_propagation_px",
+        dest="weak_reach_px",
         type=nonnegative_int,
         metavar="DISTANCE",
-        default=DEFAULT_WEAK_PROPAGATION_PX,
+        default=DEFAULT_WEAK_REACH_PX,
         help=(
-            "Maximum distance in pixels that weak-threshold detections extend "
+            "Maximum distance in px that weak-threshold detections extend "
             "from a strong detection. Default: 40"
         ),
     )
     parser.add_argument(
         "--min-strong-threshold",
-        dest="min_foreground_delta",
+        dest="min_strong_threshold",
         type=positive_float,
         metavar="VALUE",
-        default=DEFAULT_MIN_FOREGROUND_DELTA,
+        default=DEFAULT_MIN_STRONG_THRESHOLD,
         help="Lower bound for automatic threshold. Default: 1500",
     )
     parser.add_argument(
+        "--min-droplet-area-px2",
         "--min-droplet-area-px",
-        dest="min_area_px",
+        dest="min_droplet_area_px2",
         type=positive_float,
         metavar="AREA",
         default=250,
-        help="Minimum liquid component area in pixels.",
+        help="Minimum liquid component area in px2.",
     )
     parser.add_argument(
         "--morphology-radius-px",
@@ -224,21 +227,22 @@ def build_parser() -> argparse.ArgumentParser:
         type=nonnegative_int,
         default=DEFAULT_SURFACE_BAND_PX,
         help=(
-            "Half-height in pixels of the band around the surface line within "
+            "Half-height in px of the band around the surface line within "
             "which the spreading width is measured. Default: 3"
         ),
     )
     parser.add_argument(
         "--foreground-depth-px",
-        dest="measure_below_surface_px",
+        dest="foreground_depth_px",
         type=nonnegative_int,
         metavar="DEPTH",
         default=220,
         help="Foreground ROI depth below the surface line.",
     )
     parser.add_argument(
+        "--min-contact-px",
         "--min-contact-pixels",
-        dest="min_touch_pixels",
+        dest="min_contact_px",
         type=nonnegative_int,
         metavar="COUNT",
         default=30,
@@ -248,6 +252,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--hydrophobic",
         "--HO",
         dest="hydrophobic",
         type=zero_or_one,
@@ -263,7 +268,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=nonnegative_int,
         default=30,
         help=(
-            "Minimum selected spreading width for a frame to be marked as "
+            "Minimum contact-line diameter in px for a frame to be marked as "
             "the impact frame. Default: 30"
         ),
     )
@@ -287,7 +292,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--debug-interval",
-        dest="debug_every",
+        dest="debug_interval",
         type=positive_int,
         metavar="FRAMES",
         default=1,
@@ -332,27 +337,27 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         input_dir=args.input_dir,
         output_csv=args.output_csv or output_dir / "spreading_diameter.csv",
         fps=args.fps,
-        pixel_size_mm=args.pixel_size_mm,
-        surface_y=args.surface_y,
-        surface_frame=args.surface_frame,
+        pixel_size_mm_per_px=args.pixel_size_mm_per_px,
+        surface_y_px=args.surface_y_px,
+        calibration_frame=args.calibration_frame,
         surface_angle_deg=args.surface_angle_deg,
         reflection_mode=args.reflection_mode,
-        threshold=args.threshold,
+        strong_threshold=args.strong_threshold,
         weak_threshold=args.weak_threshold,
-        weak_threshold_fraction=args.weak_threshold_fraction,
-        weak_propagation_px=args.weak_propagation_px,
-        min_foreground_delta=args.min_foreground_delta,
-        min_area_px=int(args.min_area_px),
+        weak_threshold_ratio=args.weak_threshold_ratio,
+        weak_reach_px=args.weak_reach_px,
+        min_strong_threshold=args.min_strong_threshold,
+        min_droplet_area_px2=int(args.min_droplet_area_px2),
         morphology_radius_px=args.morphology_radius_px,
         surface_band_px=args.surface_band_px,
         hydrophobic=bool(args.hydrophobic),
-        measure_below_surface_px=args.measure_below_surface_px,
-        min_touch_pixels=args.min_touch_pixels,
+        foreground_depth_px=args.foreground_depth_px,
+        min_contact_px=args.min_contact_px,
         min_impact_width_px=args.min_impact_width_px,
         include_pre_impact=args.include_pre_impact,
         time_zero=args.time_zero,
         debug_dir=args.debug_dir or output_dir / "debug_overlays",
-        debug_every=args.debug_every,
+        debug_interval=args.debug_interval,
         start_frame=args.start_frame,
         end_frame=args.end_frame,
     )
@@ -365,21 +370,26 @@ def main(argv: list[str] | None = None) -> None:
     write_csv(config.output_csv, measurements)
 
     impact_frame = measurements[0].impact_frame if measurements else None
-    valid = [row for row in measurements if not math.isnan(row.spreading_diameter_mm)]
+    valid = [row for row in measurements if not math.isnan(row.d_spread_mm)]
     print(f"Wrote {len(measurements)} rows to {config.output_csv}")
     if valid:
-        max_row = max(valid, key=lambda row: row.spreading_diameter_mm)
-        print(f"Surface y: {valid[0].surface_y}px")
+        max_row = max(valid, key=lambda row: row.d_spread_mm)
+        print(f"Surface y: {valid[0].surface_y_px} px")
         print(f"Impact frame: {impact_frame if impact_frame is not None else 'not detected'}")
         print(
             "Max spreading diameter: "
-            f"{max_row.spreading_diameter_mm:.6f} mm at {max_row.time_ms:.6f} ms"
+            f"{max_row.d_spread_mm:.6f} mm at {max_row.time_ms:.6f} ms"
         )
-        if valid[0].initial_equivalent_diameter_mm is not None:
-            print(
-                "Initial equivalent diameter: "
-                f"{valid[0].initial_equivalent_diameter_mm:.6f} mm "
-                f"at frame {valid[0].reference_frame}"
-            )
     else:
         print("No valid droplet diameter measurements were found.")
+    if measurements and measurements[0].ref_frame is not None:
+        ref = measurements[0]
+        for method, diameter_mm in (
+            ("volume", ref.ref_d_eq_volume_mm),
+            ("area", ref.ref_d_eq_area_mm),
+        ):
+            if diameter_mm is not None:
+                print(
+                    f"Ref d_eq_{method}: {diameter_mm:.6f} mm "
+                    f"at frame {ref.ref_frame}"
+                )

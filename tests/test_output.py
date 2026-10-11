@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -30,7 +31,7 @@ class OutputTests(unittest.TestCase):
                 None,
                 1,
                 1.0,
-                contact_line_diameter_mm=0.5,
+                d_contact_mm=0.5,
             )
 
         self.assertEqual(put_text.call_args.args[3], cv2.FONT_HERSHEY_DUPLEX)
@@ -52,8 +53,8 @@ class OutputTests(unittest.TestCase):
                 1,
                 1.0,
                 rim_bbox=(10, 30, 90, 30),
-                contact_line_diameter_mm=0.5,
-                rim_to_rim_diameter_mm=1.0,
+                d_contact_mm=0.5,
+                d_rim_mm=1.0,
             )
             overlay = cv2.imread(str(output_path))
 
@@ -65,27 +66,29 @@ class OutputTests(unittest.TestCase):
             frame_number=61,
             filename="frame0061.tif",
             time_ms=0.0,
-            spreading_diameter_px=156.004,
-            spreading_diameter_mm=1.110565076,
-            component_area_px=72128,
-            surface_y=798,
+            d_spread_px=156.004,
+            d_spread_mm=1.110565076,
+            droplet_area_px2=72128,
+            surface_y_px=798,
             impact_frame=61,
             fps=8000.0,
-            pixel_size_mm=0.00711883341,
-            surface_frame=61,
-            contact_line_diameter_px=140.0,
-            contact_line_diameter_mm=0.9966366774,
-            rim_to_rim_diameter_px=156.004,
-            rim_to_rim_diameter_mm=1.110565076,
-            reference_frame=42,
-            initial_equivalent_diameter_px=150.0,
-            initial_equivalent_diameter_mm=1.0678250115,
-            initial_surface_parallel_diameter_px=156.004,
-            initial_surface_parallel_diameter_mm=1.110565076,
-            initial_surface_normal_diameter_px=139.0,
-            initial_surface_normal_diameter_mm=0.989517864,
-            surface_clearance_px=74.0,
-            surface_clearance_mm=0.526793672,
+            pixel_size_mm_per_px=0.00711883341,
+            calibration_frame=61,
+            d_contact_px=140.0,
+            d_contact_mm=0.9966366774,
+            d_rim_px=156.004,
+            d_rim_mm=1.110565076,
+            ref_frame=42,
+            ref_d_eq_volume_px=150.0,
+            ref_d_eq_volume_mm=1.0678250115,
+            ref_d_eq_area_px=148.0,
+            ref_d_eq_area_mm=1.05358734468,
+            ref_d_parallel_px=156.004,
+            ref_d_parallel_mm=1.110565076,
+            ref_d_normal_px=139.0,
+            ref_d_normal_mm=0.989517864,
+            ref_clearance_px=74.0,
+            ref_clearance_mm=0.526793672,
         )
         with TemporaryDirectory() as temporary_dir:
             output_path = Path(temporary_dir) / "result.csv"
@@ -97,29 +100,31 @@ class OutputTests(unittest.TestCase):
             rows[0],
             [
                 "filename",
-                "frame",
+                "frame_number",
                 "time_ms",
-                "spreading_diameter_px",
-                "spreading_diameter_mm",
-                "contact_line_diameter_px",
-                "contact_line_diameter_mm",
-                "rim_to_rim_diameter_px",
-                "rim_to_rim_diameter_mm",
-                "reference_frame",
-                "initial_equivalent_diameter_px",
-                "initial_equivalent_diameter_mm",
-                "initial_surface_parallel_diameter_px",
-                "initial_surface_parallel_diameter_mm",
-                "initial_surface_normal_diameter_px",
-                "initial_surface_normal_diameter_mm",
-                "surface_clearance_px",
-                "surface_clearance_mm",
+                "d_spread_px",
+                "d_spread_mm",
+                "d_contact_px",
+                "d_contact_mm",
+                "d_rim_px",
+                "d_rim_mm",
+                "ref_frame",
+                "ref_d_eq_volume_px",
+                "ref_d_eq_volume_mm",
+                "ref_d_eq_area_px",
+                "ref_d_eq_area_mm",
+                "ref_d_parallel_px",
+                "ref_d_parallel_mm",
+                "ref_d_normal_px",
+                "ref_d_normal_mm",
+                "ref_clearance_px",
+                "ref_clearance_mm",
                 "impact_frame",
                 "surface_y_px",
-                "component_area_px",
+                "droplet_area_px2",
                 "fps",
-                "pixel-size-mm",
-                "surface-frame",
+                "pixel_size_mm_per_px",
+                "calibration_frame",
             ],
         )
         self.assertEqual(
@@ -137,6 +142,8 @@ class OutputTests(unittest.TestCase):
                 "42",
                 "150.000",
                 "1.067825012",
+                "148.000",
+                "1.053587345",
                 "156.004",
                 "1.110565076",
                 "139.000",
@@ -151,6 +158,25 @@ class OutputTests(unittest.TestCase):
                 "61",
             ],
         )
+
+    def test_csv_leaves_missing_reference_diameters_empty(self) -> None:
+        measurement = FrameMeasurement(
+            frame_number=1, filename="frame000001.tif", time_ms=0.0,
+            d_spread_px=0.0, d_spread_mm=0.0, droplet_area_px2=0,
+            surface_y_px=80, impact_frame=None, fps=8000.0,
+            pixel_size_mm_per_px=0.01, calibration_frame=None,
+        )
+        with TemporaryDirectory() as temporary_dir:
+            output_path = Path(temporary_dir) / "result.csv"
+            write_csv(output_path, [measurement, replace(measurement, ref_d_eq_area_px=float("nan"))])
+            with output_path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+        for row in rows:
+            for column in (
+                "ref_frame", "ref_d_eq_volume_px", "ref_d_eq_volume_mm",
+                "ref_d_eq_area_px", "ref_d_eq_area_mm",
+            ):
+                self.assertEqual(row[column], "")
 
 
 if __name__ == "__main__":

@@ -32,7 +32,7 @@ from .visualization import clear_debug_overlays, write_debug_overlay
 def resolve_weak_threshold(config: AnalysisConfig, threshold: float) -> float:
     if config.weak_threshold is not None:
         return float(config.weak_threshold)
-    return threshold * config.weak_threshold_fraction
+    return threshold * config.weak_threshold_ratio
 
 
 def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
@@ -74,25 +74,25 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
     )
     structure = make_structure(config.morphology_radius_px)
     preliminary_threshold = (
-        float(config.threshold)
-        if config.threshold is not None
+        float(config.strong_threshold)
+        if config.strong_threshold is not None
         else estimate_threshold(
             files,
             background,
             coarse_surface_y,
             DEFAULT_THRESHOLD_SAMPLE_FRAMES,
-            config.min_foreground_delta,
+            config.min_strong_threshold,
         )
     )
     preliminary_weak_threshold = resolve_weak_threshold(config, preliminary_threshold)
     calibrated_surface_line: SurfaceLine | None = None
     resolved_reflection_mode = config.reflection_mode
-    if config.surface_frame is not None:
+    if config.calibration_frame is not None:
         if resolved_reflection_mode == "auto":
             resolved_reflection_mode = detect_reflection_mode_from_frame(
                 files,
                 background,
-                config.surface_frame,
+                config.calibration_frame,
                 preliminary_threshold,
                 coarse_surface_y,
                 config,
@@ -103,7 +103,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             calibrated_surface_line = estimate_surface_line_from_symmetry_frame(
                 files,
                 background,
-                config.surface_frame,
+                config.calibration_frame,
                 preliminary_threshold,
                 coarse_surface_y,
                 config,
@@ -115,7 +115,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             calibrated_surface_line = estimate_surface_line_from_nonreflection_frame(
                 files,
                 background,
-                config.surface_frame,
+                config.calibration_frame,
                 preliminary_threshold,
                 config,
                 structure,
@@ -132,7 +132,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         calibration_target_center_x(
             files,
             background,
-            config.surface_frame,
+            config.calibration_frame,
             preliminary_threshold,
             coarse_surface_y,
             config,
@@ -140,7 +140,7 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             resolved_reflection_mode,
             weak_threshold=preliminary_weak_threshold,
         )
-        if config.surface_frame is not None
+        if config.calibration_frame is not None
         else None
     )
 
@@ -151,8 +151,8 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
     else:
         surface_angle_deg = DEFAULT_SURFACE_ANGLE_DEG
 
-    if config.surface_y is not None:
-        surface_line = SurfaceLine(float(int(config.surface_y)), surface_angle_deg)
+    if config.surface_y_px is not None:
+        surface_line = SurfaceLine(float(int(config.surface_y_px)), surface_angle_deg)
     elif calibrated_surface_line is not None:
         # The line calibrated from --calibration-frame is the single fixed
         # reference used verbatim for every frame in the sequence.
@@ -161,14 +161,14 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         surface_line = SurfaceLine(float(coarse_surface_y), surface_angle_deg)
 
     threshold = (
-        float(config.threshold)
-        if config.threshold is not None
+        float(config.strong_threshold)
+        if config.strong_threshold is not None
         else estimate_threshold(
             files,
             background,
             surface_line.center_y_int(),
             DEFAULT_THRESHOLD_SAMPLE_FRAMES,
-            config.min_foreground_delta,
+            config.min_strong_threshold,
         )
     )
     weak_threshold = resolve_weak_threshold(config, threshold)
@@ -178,8 +178,8 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
 
     pending = []
     impact_frame: int | None = None
-    reference_frame: int | None = None
-    reference_measurement = None
+    ref_frame: int | None = None
+    ref_measurement = None
 
     for file_path in files:
         frame_number = frame_number_from_filename(file_path)
@@ -199,23 +199,23 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         is_touching = touches_surface(measurement, effective_config)
         if impact_frame is None and is_touching:
             impact_frame = frame_number
-        is_reference_frame = False
+        is_ref_frame = False
         if (
-            reference_measurement is None
-            and measurement.equivalent_diameter_px is not None
+            ref_measurement is None
+            and measurement.d_eq_volume_px is not None
             and measurement.surface_clearance_px is not None
             and measurement.surface_clearance_px
-            <= measurement.equivalent_diameter_px / 2.0
+            <= measurement.d_eq_volume_px / 2.0
         ):
-            reference_frame = frame_number
-            reference_measurement = measurement
-            is_reference_frame = True
+            ref_frame = frame_number
+            ref_measurement = measurement
+            is_ref_frame = True
         pending.append((frame_number, file_path, measurement))
 
         if config.debug_dir is not None and (
             frame_number == first_frame_number
-            or frame_number % config.debug_every == 0
-            or is_reference_frame
+            or frame_number % config.debug_interval == 0
+            or is_ref_frame
             or (is_touching and abs(frame_number - (impact_frame or frame_number)) <= 2)
         ):
             debug_path = config.debug_dir / f"{frame_number:06d}.png"
@@ -226,18 +226,18 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
                 surface_line,
                 measurement.contact_bbox,
                 frame_number,
-                spreading_diameter_mm=(
-                    measurement.spreading_diameter_px * config.pixel_size_mm
+                d_spread_mm=(
+                    measurement.d_spread_px * config.pixel_size_mm_per_px
                 ),
                 rim_bbox=measurement.rim_bbox,
-                contact_line_diameter_mm=(
-                    measurement.contact_line_diameter_px * config.pixel_size_mm
-                    if measurement.contact_line_diameter_px is not None
+                d_contact_mm=(
+                    measurement.d_contact_px * config.pixel_size_mm_per_px
+                    if measurement.d_contact_px is not None
                     else None
                 ),
-                rim_to_rim_diameter_mm=(
-                    measurement.rim_to_rim_diameter_px * config.pixel_size_mm
-                    if measurement.rim_to_rim_diameter_px is not None
+                d_rim_mm=(
+                    measurement.d_rim_px * config.pixel_size_mm_per_px
+                    if measurement.d_rim_px is not None
                     else None
                 ),
             )
@@ -254,77 +254,88 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         if not config.include_pre_impact and impact_frame is not None and frame_number < impact_frame:
             continue
 
-        spreading_diameter_mm = measurement.spreading_diameter_px * config.pixel_size_mm
+        d_spread_mm = measurement.d_spread_px * config.pixel_size_mm_per_px
         measurements.append(
             FrameMeasurement(
                 frame_number=frame_number,
                 filename=file_path.name,
                 time_ms=frame_offset / config.fps * 1000.0,
-                spreading_diameter_px=measurement.spreading_diameter_px,
-                spreading_diameter_mm=spreading_diameter_mm,
-                component_area_px=measurement.area_px,
-                surface_y=surface_line.center_y_int(),
+                d_spread_px=measurement.d_spread_px,
+                d_spread_mm=d_spread_mm,
+                droplet_area_px2=measurement.area_px2,
+                surface_y_px=surface_line.center_y_int(),
                 impact_frame=impact_frame,
                 fps=config.fps,
-                pixel_size_mm=config.pixel_size_mm,
-                surface_frame=config.surface_frame,
-                contact_line_diameter_px=measurement.contact_line_diameter_px,
-                contact_line_diameter_mm=(
-                    measurement.contact_line_diameter_px * config.pixel_size_mm
-                    if measurement.contact_line_diameter_px is not None
+                pixel_size_mm_per_px=config.pixel_size_mm_per_px,
+                calibration_frame=config.calibration_frame,
+                d_contact_px=measurement.d_contact_px,
+                d_contact_mm=(
+                    measurement.d_contact_px * config.pixel_size_mm_per_px
+                    if measurement.d_contact_px is not None
                     else None
                 ),
-                rim_to_rim_diameter_px=measurement.rim_to_rim_diameter_px,
-                rim_to_rim_diameter_mm=(
-                    measurement.rim_to_rim_diameter_px * config.pixel_size_mm
-                    if measurement.rim_to_rim_diameter_px is not None
+                d_rim_px=measurement.d_rim_px,
+                d_rim_mm=(
+                    measurement.d_rim_px * config.pixel_size_mm_per_px
+                    if measurement.d_rim_px is not None
                     else None
                 ),
-                reference_frame=reference_frame,
-                initial_equivalent_diameter_px=(
-                    reference_measurement.equivalent_diameter_px
-                    if reference_measurement is not None
+                ref_frame=ref_frame,
+                ref_d_eq_volume_px=(
+                    ref_measurement.d_eq_volume_px
+                    if ref_measurement is not None
                     else None
                 ),
-                initial_equivalent_diameter_mm=(
-                    reference_measurement.equivalent_diameter_px * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.equivalent_diameter_px is not None
+                ref_d_eq_volume_mm=(
+                    ref_measurement.d_eq_volume_px * config.pixel_size_mm_per_px
+                    if ref_measurement is not None
+                    and ref_measurement.d_eq_volume_px is not None
                     else None
                 ),
-                initial_surface_parallel_diameter_px=(
-                    reference_measurement.surface_parallel_diameter_px
-                    if reference_measurement is not None
+                ref_d_eq_area_px=(
+                    ref_measurement.d_eq_area_px
+                    if ref_measurement is not None
                     else None
                 ),
-                initial_surface_parallel_diameter_mm=(
-                    reference_measurement.surface_parallel_diameter_px
-                    * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.surface_parallel_diameter_px is not None
+                ref_d_eq_area_mm=(
+                    ref_measurement.d_eq_area_px * config.pixel_size_mm_per_px
+                    if ref_measurement is not None
+                    and ref_measurement.d_eq_area_px is not None
                     else None
                 ),
-                initial_surface_normal_diameter_px=(
-                    reference_measurement.surface_normal_diameter_px
-                    if reference_measurement is not None
+                ref_d_parallel_px=(
+                    ref_measurement.d_parallel_px
+                    if ref_measurement is not None
                     else None
                 ),
-                initial_surface_normal_diameter_mm=(
-                    reference_measurement.surface_normal_diameter_px
-                    * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.surface_normal_diameter_px is not None
+                ref_d_parallel_mm=(
+                    ref_measurement.d_parallel_px
+                    * config.pixel_size_mm_per_px
+                    if ref_measurement is not None
+                    and ref_measurement.d_parallel_px is not None
                     else None
                 ),
-                surface_clearance_px=(
-                    reference_measurement.surface_clearance_px
-                    if reference_measurement is not None
+                ref_d_normal_px=(
+                    ref_measurement.d_normal_px
+                    if ref_measurement is not None
                     else None
                 ),
-                surface_clearance_mm=(
-                    reference_measurement.surface_clearance_px * config.pixel_size_mm
-                    if reference_measurement is not None
-                    and reference_measurement.surface_clearance_px is not None
+                ref_d_normal_mm=(
+                    ref_measurement.d_normal_px
+                    * config.pixel_size_mm_per_px
+                    if ref_measurement is not None
+                    and ref_measurement.d_normal_px is not None
+                    else None
+                ),
+                ref_clearance_px=(
+                    ref_measurement.surface_clearance_px
+                    if ref_measurement is not None
+                    else None
+                ),
+                ref_clearance_mm=(
+                    ref_measurement.surface_clearance_px * config.pixel_size_mm_per_px
+                    if ref_measurement is not None
+                    and ref_measurement.surface_clearance_px is not None
                     else None
                 ),
             )

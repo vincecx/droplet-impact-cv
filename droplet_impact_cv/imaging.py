@@ -12,7 +12,7 @@ from scipy.signal import find_peaks
 
 from .models import (
     DEFAULT_SURFACE_BAND_PX,
-    DEFAULT_WEAK_PROPAGATION_PX,
+    DEFAULT_WEAK_REACH_PX,
     AnalysisConfig,
     ComponentMeasurement,
     SurfaceLine,
@@ -114,15 +114,15 @@ def estimate_surface_y(background: np.ndarray, search_start_px: int, drop_delta:
 def estimate_threshold(
     files: list[Path],
     background: np.ndarray,
-    surface_y: int,
+    surface_y_px: int,
     sample_frame_count: int,
-    min_foreground_delta: float,
+    min_strong_threshold: float,
 ) -> float:
     sample_files = files[: min(sample_frame_count, len(files))]
     if len(sample_files) < 2:
-        return min_foreground_delta
+        return min_strong_threshold
 
-    roi_bottom = max(10, min(surface_y - 30, background.shape[0]))
+    roi_bottom = max(10, min(surface_y_px - 30, background.shape[0]))
     noise_samples = []
     for path in sample_files:
         image = read_image(path)
@@ -133,7 +133,7 @@ def estimate_threshold(
     median = float(np.median(noise))
     mad = float(np.median(np.abs(noise - median)))
     sigma = 1.4826 * mad
-    return max(min_foreground_delta, median + 8.0 * sigma)
+    return max(min_strong_threshold, median + 8.0 * sigma)
 
 
 def make_structure(radius_px: int) -> np.ndarray:
@@ -162,7 +162,7 @@ def hysteresis_change_mask(
     threshold: float,
     weak_threshold: float | None,
     roi: np.ndarray | None = None,
-    max_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
+    max_propagation_px: int = DEFAULT_WEAK_REACH_PX,
 ) -> np.ndarray:
     """Detect changed pixels with an optional weak-threshold extension.
 
@@ -202,14 +202,14 @@ def foreground_mask(
 ) -> np.ndarray:
     yy, xx = np.indices(image.shape)
     distance_from_surface = yy - surface_line.y_at(xx, image.shape[1])
-    roi = distance_from_surface <= config.measure_below_surface_px
+    roi = distance_from_surface <= config.foreground_depth_px
     changed = hysteresis_change_mask(
         image,
         background,
         threshold,
         weak_threshold,
         roi,
-        config.weak_propagation_px,
+        config.weak_reach_px,
     )
     return clean_binary_mask(changed.astype(np.uint8), structure)
 
@@ -220,19 +220,19 @@ def full_foreground_mask(
     threshold: float,
     structure: np.ndarray,
     weak_threshold: float | None = None,
-    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
+    weak_reach_px: int = DEFAULT_WEAK_REACH_PX,
 ) -> np.ndarray:
     changed = hysteresis_change_mask(
         image,
         background,
         threshold,
         weak_threshold,
-        max_propagation_px=weak_propagation_px,
+        max_propagation_px=weak_reach_px,
     )
     return clean_binary_mask(changed, structure)
 
 
-def largest_component(mask: np.ndarray, min_area_px: int) -> np.ndarray:
+def largest_component(mask: np.ndarray, min_droplet_area_px2: int) -> np.ndarray:
     labels, count = ndi.label(mask)
     if count == 0:
         return np.zeros(mask.shape, dtype=bool)
@@ -241,7 +241,7 @@ def largest_component(mask: np.ndarray, min_area_px: int) -> np.ndarray:
     best_area = 0
     for label in range(1, count + 1):
         area = int(np.sum(labels == label))
-        if area >= min_area_px and area > best_area:
+        if area >= min_droplet_area_px2 and area > best_area:
             best_label = label
             best_area = area
 
@@ -284,10 +284,10 @@ def select_liquid_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_area_px:
+        if area < config.min_droplet_area_px2:
             continue
         gas_side_pixels = int((component & gas_side).sum())
-        if gas_side_pixels < config.min_touch_pixels:
+        if gas_side_pixels < config.min_contact_px:
             continue
         bbox = component_bbox(component)
         assert bbox is not None
@@ -459,10 +459,10 @@ def surface_aligned_dimensions(
     normal = xs * normal_x + ys * normal_y
     tangent_min, tangent_max = float(tangent.min()), float(tangent.max())
     normal_min, normal_max = float(normal.min()), float(normal.max())
-    surface_parallel_diameter_px = tangent_max - tangent_min + 1.0
-    surface_normal_diameter_px = normal_max - normal_min + 1.0
-    equivalent_diameter_px = (
-        surface_normal_diameter_px * surface_parallel_diameter_px**2
+    d_parallel_px = tangent_max - tangent_min + 1.0
+    d_normal_px = normal_max - normal_min + 1.0
+    d_eq_volume_px = (
+        d_normal_px * d_parallel_px**2
     ) ** (1.0 / 3.0)
 
     def point_at(tangent_position: float, normal_position: float) -> tuple[int, int]:
@@ -481,9 +481,9 @@ def surface_aligned_dimensions(
     signed_normal_distance = (ys - surface_line.y_at(xs, component.shape[1])) / scale
     surface_clearance_px = max(0.0, -float(signed_normal_distance.max()))
     return (
-        surface_parallel_diameter_px,
-        surface_normal_diameter_px,
-        equivalent_diameter_px,
+        d_parallel_px,
+        d_normal_px,
+        d_eq_volume_px,
         surface_clearance_px,
         parallel_line,
         normal_line,
@@ -535,6 +535,9 @@ def component_measurement(
     # then treat the selected droplet's enclosed bright regions as liquid.
     component = fill_droplet_interior(component, surface_line)
     aligned_dimensions = surface_aligned_dimensions(component, surface_line)
+    # Circle with the same filled silhouette area; measure before surface clipping,
+    # as for the volume-equivalent diameter and the two projection spans.
+    d_eq_area_px = math.sqrt(4.0 * int(component.sum()) / math.pi)
 
     # Hydrophobic droplets are measured rim-to-rim. Otherwise, the diameter is
     # the silhouette width where it meets the fixed surface-line band. Both
@@ -544,7 +547,7 @@ def component_measurement(
         component, surface_line, config.surface_band_px
     )
     contact_bbox = None
-    contact_line_diameter_px = 0.0
+    d_contact_px = 0.0
     if contact_bounds is not None:
         contact_x_min, contact_x_max = contact_bounds
         contact_bbox = (
@@ -553,7 +556,7 @@ def component_measurement(
             contact_x_max,
             int(round(surface_line.y_at(contact_x_max, component.shape[1]))),
         )
-        contact_line_diameter_px = float(
+        d_contact_px = float(
             (contact_x_max - contact_x_min + 1)
             * math.sqrt(1.0 + surface_line.slope**2)
         )
@@ -568,22 +571,22 @@ def component_measurement(
         surface_line,
         SURFACE_MASK_BELOW_TOLERANCE_PX,
     )
-    clipped_component = largest_component(component, config.min_area_px)
+    clipped_component = largest_component(component, config.min_droplet_area_px2)
     if clipped_component.any():
         component = clipped_component
     area = int(component.sum())
     if aligned_dimensions is None:
-        surface_parallel_diameter_px = None
-        surface_normal_diameter_px = None
-        equivalent_diameter_px = None
+        d_parallel_px = None
+        d_normal_px = None
+        d_eq_volume_px = None
         surface_clearance_px = None
         surface_parallel_line = None
         surface_normal_line = None
     else:
         (
-            surface_parallel_diameter_px,
-            surface_normal_diameter_px,
-            equivalent_diameter_px,
+            d_parallel_px,
+            d_normal_px,
+            d_eq_volume_px,
             surface_clearance_px,
             surface_parallel_line,
             surface_normal_line,
@@ -591,19 +594,20 @@ def component_measurement(
     if config.hydrophobic:
         if rim_measurement is None:
             return ComponentMeasurement(0.0, area, None, component)
-        spreading_diameter_px, rim_bbox = rim_measurement
+        d_spread_px, rim_bbox = rim_measurement
         return ComponentMeasurement(
-            spreading_diameter_px,
+            d_spread_px,
             area,
             rim_bbox,
             component,
             contact_bbox=contact_bbox,
             rim_bbox=rim_bbox,
-            contact_line_diameter_px=contact_line_diameter_px,
-            rim_to_rim_diameter_px=spreading_diameter_px,
-            surface_parallel_diameter_px=surface_parallel_diameter_px,
-            surface_normal_diameter_px=surface_normal_diameter_px,
-            equivalent_diameter_px=equivalent_diameter_px,
+            d_contact_px=d_contact_px,
+            d_rim_px=d_spread_px,
+            d_parallel_px=d_parallel_px,
+            d_normal_px=d_normal_px,
+            d_eq_volume_px=d_eq_volume_px,
+            d_eq_area_px=d_eq_area_px,
             surface_clearance_px=surface_clearance_px,
             surface_parallel_line=surface_parallel_line,
             surface_normal_line=surface_normal_line,
@@ -612,9 +616,9 @@ def component_measurement(
     if contact_bounds is None:
         assert aligned_dimensions is not None
         (
-            surface_parallel_diameter_px,
-            surface_normal_diameter_px,
-            equivalent_diameter_px,
+            d_parallel_px,
+            d_normal_px,
+            d_eq_volume_px,
             surface_clearance_px,
             surface_parallel_line,
             surface_normal_line,
@@ -624,26 +628,28 @@ def component_measurement(
             area,
             None,
             component,
-            surface_parallel_diameter_px=surface_parallel_diameter_px,
-            surface_normal_diameter_px=surface_normal_diameter_px,
-            equivalent_diameter_px=equivalent_diameter_px,
+            d_parallel_px=d_parallel_px,
+            d_normal_px=d_normal_px,
+            d_eq_volume_px=d_eq_volume_px,
+            d_eq_area_px=d_eq_area_px,
             surface_clearance_px=surface_clearance_px,
             surface_parallel_line=surface_parallel_line,
             surface_normal_line=surface_normal_line,
         )
     assert contact_bbox is not None
     x_min, y_min, x_max, y_max = contact_bbox
-    spreading_diameter_px = contact_line_diameter_px
+    d_spread_px = d_contact_px
     return ComponentMeasurement(
-        spreading_diameter_px,
+        d_spread_px,
         area,
         (x_min, y_min, x_max, y_max),
         component,
         contact_bbox=contact_bbox,
-        contact_line_diameter_px=spreading_diameter_px,
-        surface_parallel_diameter_px=surface_parallel_diameter_px,
-        surface_normal_diameter_px=surface_normal_diameter_px,
-        equivalent_diameter_px=equivalent_diameter_px,
+        d_contact_px=d_spread_px,
+        d_parallel_px=d_parallel_px,
+        d_normal_px=d_normal_px,
+        d_eq_volume_px=d_eq_volume_px,
+        d_eq_area_px=d_eq_area_px,
         surface_clearance_px=surface_clearance_px,
         surface_parallel_line=surface_parallel_line,
         surface_normal_line=surface_normal_line,
@@ -653,8 +659,8 @@ def component_measurement(
 def touches_surface(measurement: ComponentMeasurement, config: AnalysisConfig) -> bool:
     """Return whether the contact-line diameter marks the start of impact."""
     return (
-        measurement.contact_line_diameter_px is not None
-        and measurement.contact_line_diameter_px >= config.min_impact_width_px
+        measurement.d_contact_px is not None
+        and measurement.d_contact_px >= config.min_impact_width_px
     )
 
 
@@ -670,7 +676,7 @@ def select_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_area_px:
+        if area < config.min_droplet_area_px2:
             continue
 
         bbox = component_bbox(component)
@@ -680,7 +686,7 @@ def select_calibration_component(
         vertical_span = y_max - y_min + 1
         below_surface = int(component[coarse_surface_y:].sum())
         above_surface = int(component[:coarse_surface_y].sum())
-        if below_surface < config.min_area_px or above_surface < config.min_area_px:
+        if below_surface < config.min_droplet_area_px2 or above_surface < config.min_droplet_area_px2:
             continue
         if y_max < coarse_surface_y + 50:
             continue
@@ -770,7 +776,7 @@ def select_symmetric_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_area_px:
+        if area < config.min_droplet_area_px2:
             continue
 
         bbox = component_bbox(component)
@@ -790,7 +796,7 @@ def select_symmetric_calibration_component(
             continue
 
         symmetry_y, symmetry_error = estimate_vertical_symmetry_y(component, bbox)
-        min_side_area = min(config.min_area_px, max(1, area // 10))
+        min_side_area = min(config.min_droplet_area_px2, max(1, area // 10))
         above_area = int(component[:symmetry_y].sum())
         below_area = int(component[symmetry_y + 1 :].sum())
         if above_area < min_side_area or below_area < min_side_area:
@@ -900,7 +906,7 @@ def calibration_frame_mask(
     threshold: float,
     structure: np.ndarray,
     weak_threshold: float | None = None,
-    weak_propagation_px: int = DEFAULT_WEAK_PROPAGATION_PX,
+    weak_reach_px: int = DEFAULT_WEAK_REACH_PX,
 ) -> np.ndarray:
     matching_file = next(
         (path for path in files if frame_number_from_filename(path) == frame_number),
@@ -916,7 +922,7 @@ def calibration_frame_mask(
         threshold,
         structure,
         weak_threshold,
-        weak_propagation_px,
+        weak_reach_px,
     )
 
 
@@ -937,7 +943,7 @@ def detect_reflection_mode_from_frame(
         threshold,
         structure,
         weak_threshold,
-        config.weak_propagation_px,
+        config.weak_reach_px,
     )
     return detect_reflection_mode(mask, coarse_surface_y, config)
 
@@ -955,7 +961,7 @@ def select_nonreflection_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_area_px or area <= best_area:
+        if area < config.min_droplet_area_px2 or area <= best_area:
             continue
         bbox = component_bbox(component)
         if bbox is None:
@@ -993,7 +999,7 @@ def calibration_target_center_x(
         threshold,
         structure,
         weak_threshold,
-        config.weak_propagation_px,
+        config.weak_reach_px,
     )
     if reflection_mode == "none":
         component = select_nonreflection_calibration_component(mask, config)
@@ -1089,7 +1095,7 @@ def estimate_surface_line_from_nonreflection_frame(
         threshold,
         structure,
         weak_threshold,
-        config.weak_propagation_px,
+        config.weak_reach_px,
     )
     component = select_nonreflection_calibration_component(mask, config)
     if component is None:
@@ -1118,7 +1124,7 @@ def estimate_surface_line_from_symmetry_frame(
         threshold,
         structure,
         weak_threshold,
-        config.weak_propagation_px,
+        config.weak_reach_px,
     )
     selected = select_calibration_component(mask, coarse_surface_y, config)
     if selected is None:

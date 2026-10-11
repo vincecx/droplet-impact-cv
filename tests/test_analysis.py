@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,7 +26,7 @@ class SequenceAnalysisTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=50,
+                surface_y_px=50,
                 start_frame=2,
                 end_frame=3,
                 debug_dir=None,
@@ -33,6 +34,11 @@ class SequenceAnalysisTests(unittest.TestCase):
             measurements = analyze_sequence(config)
 
         self.assertEqual([row.frame_number for row in measurements], [2, 3])
+        for row in measurements:
+            self.assertIsNone(row.ref_frame)
+            self.assertIsNone(row.ref_d_eq_volume_px)
+            self.assertIsNone(row.ref_d_eq_area_px)
+            self.assertIsNone(row.ref_d_eq_area_mm)
 
     def test_frame_numbers_come_from_six_digit_filename_suffixes(self) -> None:
         with TemporaryDirectory() as temporary_dir:
@@ -45,7 +51,7 @@ class SequenceAnalysisTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=50,
+                surface_y_px=50,
                 include_pre_impact=True,
                 time_zero="first-frame",
                 debug_dir=None,
@@ -66,7 +72,7 @@ class SequenceAnalysisTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=50,
+                surface_y_px=50,
                 start_frame=6,
                 end_frame=6,
                 debug_dir=None,
@@ -103,7 +109,7 @@ class SequenceAnalysisTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=50,
+                surface_y_px=50,
                 start_frame=2,
                 debug_dir=None,
             )
@@ -139,7 +145,7 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=50,
+                surface_y_px=50,
                 debug_dir=debug_dir,
             )
             analyze_sequence(config)
@@ -156,26 +162,41 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
             tifffile.imwrite(input_dir / "frame000001.tif", background)
             for frame_number, top in ((2, 20), (3, 30), (4, 34), (5, 40)):
                 image = background.copy()
-                image[top : top + 30, 30:70] = 2000
+                right = 90 if frame_number == 5 else 70
+                image[top : top + 30, 30:right] = 2000
                 tifffile.imwrite(input_dir / f"frame{frame_number:06d}.tif", image)
 
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                surface_y=80,
-                min_area_px=1,
-                min_touch_pixels=1,
+                surface_y_px=80,
+                surface_angle_deg=0.0,
+                morphology_radius_px=0,
+                min_droplet_area_px2=1,
+                min_contact_px=1,
                 include_pre_impact=True,
                 debug_dir=debug_dir,
-                debug_every=100,
+                debug_interval=100,
             )
             with patch("droplet_impact_cv.analysis.write_debug_overlay") as overlay:
                 measurements = analyze_sequence(config)
 
-        self.assertEqual([row.reference_frame for row in measurements], [4, 4, 4, 4, 4])
+        self.assertEqual([row.ref_frame for row in measurements], [4, 4, 4, 4, 4])
         self.assertTrue(
-            all(row.initial_equivalent_diameter_px is not None for row in measurements)
+            all(row.ref_d_eq_volume_px is not None for row in measurements)
         )
+        for row in measurements:
+            self.assertAlmostEqual(row.ref_d_eq_volume_px, (40**2 * 30)**(1/3))
+            self.assertAlmostEqual(row.ref_d_eq_area_px, math.sqrt(4 * 1200 / math.pi))
+            self.assertAlmostEqual(
+                row.ref_d_eq_area_mm,
+                row.ref_d_eq_area_px * config.pixel_size_mm_per_px,
+            )
+            self.assertAlmostEqual(
+                row.ref_d_eq_volume_mm,
+                row.ref_d_eq_volume_px * config.pixel_size_mm_per_px,
+            )
+        self.assertNotEqual(measurements[-1].droplet_area_px2, measurements[-2].droplet_area_px2)
         self.assertEqual(overlay.call_count, 2)
         self.assertIsNotNone(overlay.call_args_list[0].args[2])
         self.assertIsNotNone(overlay.call_args_list[1].args[2])
@@ -189,15 +210,15 @@ class ContourMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_area_px=1,
-            min_touch_pixels=1,
+            min_droplet_area_px2=1,
+            min_contact_px=1,
             debug_dir=None,
         )
 
         measurement = component_measurement(mask, SurfaceLine(50.0, angle_deg=0.0), config)
 
         self.assertFalse(np.any(measurement.mask & ~mask.astype(bool)))
-        self.assertEqual(measurement.spreading_diameter_px, 50.0)
+        self.assertEqual(measurement.d_spread_px, 50.0)
 
 
 if __name__ == "__main__":

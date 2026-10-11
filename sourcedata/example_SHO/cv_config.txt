@@ -1,0 +1,7 @@
+--fps 5000
+--pixel-size-mm-per-px 0.01682736321
+--calibration-frame 562
+--surface-y-px 914
+--reflection-mode none
+--min-strong-threshold 650
+--hydrophobic 1
