@@ -32,6 +32,59 @@ uv run droplet-impact-cv path/to/image_sequences \
   --reflection-mode auto
 ```
 
+### Semi-automatic GUI mode
+
+```bash
+uv run droplet-impact-cv-gui
+```
+
+The fully automatic CLI remains available as `droplet-impact-cv`. The GUI uses
+English labels and accepts no input-directory argument or analysis overrides.
+Choose exactly one image folder with **Choose Folder...**. Initial settings
+come from that folder's `cv_config.txt`, then program defaults; changes in the
+GUI take precedence for the current session only.
+
+On opening the folder, the GUI loads the background and calibration, then scans
+only until it finds the first `ref_frame`. That frame is the default preview;
+if no reference is detected, the first frame is shown. The frame slider includes
+only existing images inside the configured `start_frame` / `end_frame` range.
+The first selected frame remains the background, as in automatic mode.
+
+**Before Processing** and **After Processing** show the same frame side by side.
+Adjust contour parameters using sliders or number entries. Each control includes
+a short explanation and the expected adjustment effect. **Auto** preserves the
+automatic strong/weak threshold or surface calibration logic; clear it to use an
+explicit value. Suggested slider ranges expand to accommodate larger configured
+or typed values. Reflection mode and hydrophobic measurement are also adjustable.
+**Reset Parameters** restores settings loaded from the folder and defaults.
+
+Edits and frame changes refresh only the selected frame after a short debounce.
+Background and file selection are reused. If a parameter affects calibration or
+automatic threshold estimation, those supporting calculations are refreshed;
+the full sequence and reference search are not rerun during preview. Previewing
+creates no output files and does not clear existing debug overlays.
+
+Click **Process All Frames** to analyze the complete working range with a snapshot
+of the current GUI settings. Controls are locked during processing and a progress
+bar shows completion. Choose an **Output Folder** using one of three options:
+
+- **Project outputs (same as automatic mode)**: `<project-dir>/outputs/<input-folder-name>/`.
+- **Input folder / CV_postprocessing**: `<input-folder>/CV_postprocessing/`.
+- **Custom folder**: enter a directory or use **Browse...** to select one.
+
+The selected folder contains the CSV, and diagnostic images always go into its
+`debug_overlays` subfolder. The configured CSV filename is preserved. A configured
+CSV path outside the automatic output directory initially selects **Custom folder**;
+otherwise the automatic location is selected. The GUI output choice overrides
+configured output paths, including `--debug-dir`.
+
+Filtering and measurement rules match automatic mode. Other settings, including
+fps, pixel size, calibration frame, and pre-impact export, remain as loaded from
+`cv_config.txt` or defaults. Parameters are never written back to `cv_config.txt`.
+
+The GUI requires Python with Tk support (`tkinter`); no additional GUI package
+is required by the project's Windows uv environment.
+
 ### Runtime logic
 
 1. Read the TIFF/JPEG frames whose filenames end in a six-digit frame number,
@@ -117,22 +170,28 @@ interior. If noise forms separate components, tune `--min-droplet-area-px2` and
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `-o`, `--output-csv` | `outputs/<input-folder>/spreading_diameter.csv` | CSV output path. |
+| `-o`, `--output-csv` | `<project-dir>/outputs/<input-folder-name>/spreading_diameter.csv` | CSV output path. |
 | `--foreground-depth-px` | `220` | Foreground ROI depth below the surface. |
 | `--min-contact-px` | `30` | Minimum gas-side foreground px for the selected droplet. |
 | `--min-impact-width-px` | `30` | Contact-line diameter that marks the first impact frame. |
 | `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
 | `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
-| `--debug-dir` | `outputs/<input-folder>/debug_overlays` | Diagnostic overlay directory. |
+| `--debug-dir` | `<project-dir>/outputs/<input-folder-name>/debug_overlays` | Diagnostic overlay directory. |
 | `--debug-interval` | `1` | Write one debug overlay every N frames. |
 
 ## Outputs
 
-By default, all outputs are grouped under a folder named after the input
-folder. e.g., For the command `uv run droplet-impact-cv sourcedata/example`, the
-CSV is written to `outputs/example/spreading_diameter.csv` and diagnostic
-overlays are written to `outputs/example/debug_overlays`. Use `--debug-dir` to
-choose a different directory for debug overlays.
+In fully automatic mode, default outputs are anchored to the project directory
+(the directory containing `pyproject.toml`), independently of the input location
+and current working directory. For `uv run droplet-impact-cv sourcedata/example`,
+the CSV goes to `<project-dir>/outputs/example/spreading_diameter.csv` and overlays
+to `<project-dir>/outputs/example/debug_overlays`. Use `--output-csv` and
+`--debug-dir` to override these automatic-mode paths.
+
+In GUI mode, the input-folder shortcut for `sourcedata/example` writes the CSV to
+`sourcedata/example/CV_postprocessing/spreading_diameter.csv` and overlays to
+`sourcedata/example/CV_postprocessing/debug_overlays/`. Both shortcuts and manual
+selection keep overlays under `debug_overlays` inside the selected output folder.
 
 The reported `d_spread` is the maximum width of the
 detected liquid silhouette within `--surface-band-px` px above or below the
@@ -202,7 +261,8 @@ pre-impact rows are omitted. Use `--include-pre-impact` to keep all frames, or
 
 ## Project structure
 
-- `droplet_impact_cv/cli.py`: command-line parsing and entry point
+- `droplet_impact_cv/cli.py`: fully automatic command-line parsing and entry point
+- `droplet_impact_cv/gui.py`: semi-automatic GUI, parameter controls, and single-frame preview
 - `droplet_impact_cv/models.py`: configuration and result data models
 - `droplet_impact_cv/imaging.py`: TIFF loading, segmentation, and surface calibration
 - `droplet_impact_cv/analysis.py`: sequence-level analysis workflow

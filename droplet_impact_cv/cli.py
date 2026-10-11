@@ -21,6 +21,7 @@ from .output import write_csv
 
 
 CONFIG_FILENAME = "cv_config.txt"
+PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
 def positive_float(value: str) -> float:
@@ -59,7 +60,7 @@ def unit_fraction(value: str) -> float:
 
 
 def default_output_dir(input_dir: Path) -> Path:
-    return Path("outputs") / input_dir.name
+    return PROJECT_DIR / "outputs" / input_dir.resolve().name
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,7 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         default=None,
-        help="Output CSV path. Default: outputs/<input-folder>/spreading_diameter.csv",
+        help="Output CSV path. Default: <project-dir>/outputs/<input-folder>/spreading_diameter.csv",
     )
     parser.add_argument(
         "--start-frame",
@@ -284,7 +285,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug-dir",
         type=Path,
         default=None,
-        help="Directory for overlay PNG diagnostics. Default: outputs/<input-folder>/debug_overlays",
+        help="Directory for overlay PNG diagnostics. Default: <project-dir>/outputs/<input-folder>/debug_overlays",
     )
     parser.add_argument(
         "--debug-interval",

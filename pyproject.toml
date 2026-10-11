@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 droplet-impact-cv = "droplet_impact_cv.cli:main"
+droplet-impact-cv-gui = "droplet_impact_cv.gui:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Callable
+
+import numpy as np
 
 from .imaging import (
     build_background,
@@ -24,6 +27,7 @@ from .models import (
     DEFAULT_SURFACE_ANGLE_DEG,
     AnalysisConfig,
     FrameMeasurement,
+    ComponentMeasurement,
     SurfaceLine,
 )
 from .visualization import clear_debug_overlays, write_debug_overlay
@@ -35,7 +39,7 @@ def resolve_weak_threshold(config: AnalysisConfig, threshold: float) -> float:
     return threshold * config.weak_threshold_ratio
 
 
-def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
+def select_sequence_files(config: AnalysisConfig) -> list[Path]:
     all_files = find_image_files(config.input_dir)
     if config.start_frame is not None and config.start_frame < 1:
         raise ValueError("start_frame must be at least 1")
@@ -65,8 +69,46 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             if config.end_frame is not None:
                 bounds.append(f"at or before frame {config.end_frame}")
             raise ValueError(f"No input frames found {' and '.join(bounds)}")
-    first_frame_number = frame_number_from_filename(files[0])
-    background = build_background(files)
+    return files
+
+
+@dataclass(frozen=True)
+class PreparedSequence:
+    config: AnalysisConfig
+    files: list[Path]
+    background: np.ndarray
+    surface_line: SurfaceLine
+    threshold: float
+    weak_threshold: float
+    structure: np.ndarray
+    target_center_x: float | None
+
+    def measure(self, file_path: Path) -> tuple[np.ndarray, ComponentMeasurement]:
+        image = read_image(file_path)
+        mask = foreground_mask(
+            image, self.background, self.surface_line, self.threshold,
+            self.config, self.structure, weak_threshold=self.weak_threshold,
+        )
+        return image, component_measurement(
+            mask, self.surface_line, self.config, self.target_center_x
+        )
+
+
+def is_reference_measurement(measurement: ComponentMeasurement) -> bool:
+    return (
+        measurement.d_eq_volume_px is not None
+        and measurement.surface_clearance_px is not None
+        and measurement.surface_clearance_px <= measurement.d_eq_volume_px / 2.0
+    )
+
+
+def prepare_sequence(
+    config: AnalysisConfig,
+    files: list[Path] | None = None,
+    background: np.ndarray | None = None,
+) -> PreparedSequence:
+    files = select_sequence_files(config) if files is None else files
+    background = build_background(files) if background is None else background
     coarse_surface_y = estimate_surface_y(
         background,
         config.surface_search_start_px,
@@ -172,6 +214,21 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
         )
     )
     weak_threshold = resolve_weak_threshold(config, threshold)
+    return PreparedSequence(
+        effective_config, files, background, surface_line, threshold,
+        weak_threshold, structure, target_center_x,
+    )
+
+
+def analyze_sequence(
+    config: AnalysisConfig,
+    progress: Callable[[int, int], None] | None = None,
+) -> list[FrameMeasurement]:
+    prepared = prepare_sequence(config)
+    files = prepared.files
+    first_frame_number = frame_number_from_filename(files[0])
+    surface_line = prepared.surface_line
+    effective_config = prepared.config
 
     if config.debug_dir is not None:
         clear_debug_overlays(config.debug_dir)
@@ -181,32 +238,16 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
     ref_frame: int | None = None
     ref_measurement = None
 
-    for file_path in files:
+    for index, file_path in enumerate(files):
+        if progress is not None:
+            progress(index, len(files))
         frame_number = frame_number_from_filename(file_path)
-        image = read_image(file_path)
-        mask = foreground_mask(
-            image,
-            background,
-            surface_line,
-            threshold,
-            effective_config,
-            structure,
-            weak_threshold=weak_threshold,
-        )
-        measurement = component_measurement(
-            mask, surface_line, effective_config, target_center_x
-        )
+        image, measurement = prepared.measure(file_path)
         is_touching = touches_surface(measurement, effective_config)
         if impact_frame is None and is_touching:
             impact_frame = frame_number
         is_ref_frame = False
-        if (
-            ref_measurement is None
-            and measurement.d_eq_volume_px is not None
-            and measurement.surface_clearance_px is not None
-            and measurement.surface_clearance_px
-            <= measurement.d_eq_volume_px / 2.0
-        ):
+        if ref_measurement is None and is_reference_measurement(measurement):
             ref_frame = frame_number
             ref_measurement = measurement
             is_ref_frame = True
@@ -341,4 +382,6 @@ def analyze_sequence(config: AnalysisConfig) -> list[FrameMeasurement]:
             )
         )
 
+    if progress is not None:
+        progress(len(files), len(files))
     return measurements

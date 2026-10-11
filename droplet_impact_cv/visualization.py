@@ -28,8 +28,7 @@ def clear_debug_overlays(debug_dir: Path) -> None:
         path.unlink()
 
 
-def write_debug_overlay(
-    path: Path,
+def render_debug_overlay(
     image: np.ndarray,
     mask: np.ndarray | None,
     surface_line: SurfaceLine,
@@ -39,7 +38,7 @@ def write_debug_overlay(
     rim_bbox: tuple[int, int, int, int] | None = None,
     d_contact_mm: float | None = None,
     d_rim_mm: float | None = None,
-) -> None:
+) -> np.ndarray:
     lo, hi = np.percentile(image, [0.5, 99.5])
     gray = np.clip((image - lo) / max(1.0, hi - lo) * 255.0, 0, 255).astype(np.uint8)
     overlay = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -85,5 +84,24 @@ def write_debug_overlay(
             1,
             cv2.LINE_AA,
         )
+    return overlay
+
+
+def write_debug_overlay(
+    path: Path,
+    image: np.ndarray,
+    mask: np.ndarray | None,
+    surface_line: SurfaceLine,
+    bbox: tuple[int, int, int, int] | None,
+    frame_number: int,
+    d_spread_mm: float,
+    rim_bbox: tuple[int, int, int, int] | None = None,
+    d_contact_mm: float | None = None,
+    d_rim_mm: float | None = None,
+) -> None:
+    overlay = render_debug_overlay(
+        image, mask, surface_line, bbox, frame_number, d_spread_mm,
+        rim_bbox, d_contact_mm, d_rim_mm,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), overlay)

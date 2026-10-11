@@ -7,7 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from droplet_impact_cv.cli import build_parser, config_from_args, main, parse_args
+from droplet_impact_cv.cli import PROJECT_DIR, build_parser, config_from_args, default_output_dir, main, parse_args
 from droplet_impact_cv.models import (
     FrameMeasurement,
     DEFAULT_MIN_STRONG_THRESHOLD,
@@ -89,8 +89,24 @@ class CliConfigTests(unittest.TestCase):
         args = build_parser().parse_args(["sourcedata/example"])
         config = config_from_args(args)
 
-        self.assertEqual(config.output_csv, Path("outputs/example/spreading_diameter.csv"))
-        self.assertEqual(config.debug_dir, Path("outputs/example/debug_overlays"))
+        self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/example/spreading_diameter.csv")
+        self.assertEqual(config.debug_dir, PROJECT_DIR / "outputs/example/debug_overlays")
+
+    def test_default_output_is_fixed_to_project_for_external_input_and_other_cwd(self) -> None:
+        import os
+        previous = Path.cwd()
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir) / "external-input"
+            folder.mkdir()
+            try:
+                os.chdir(temporary_dir)
+                config = config_from_args(build_parser().parse_args([str(folder)]))
+                self.assertEqual(default_output_dir(folder), PROJECT_DIR / "outputs/external-input")
+                self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/external-input/spreading_diameter.csv")
+                self.assertEqual(config.debug_dir, PROJECT_DIR / "outputs/external-input/debug_overlays")
+                self.assertTrue(config.output_csv.is_absolute())
+            finally:
+                os.chdir(previous)
 
     def test_frame_range_is_optional_and_inclusive_limits_are_stored(self) -> None:
         parser = build_parser()
