@@ -4,6 +4,7 @@ import argparse
 import math
 import queue
 import threading
+import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
@@ -126,31 +127,70 @@ class Parameter:
 
 
 PARAMETERS = (
-    Parameter("strong_threshold", "Strong threshold", 1, 4095, 1,
-              "Reliable foreground change. Lower values admit fainter liquid and more noise.", True),
-    Parameter("min_strong_threshold", "Min strong threshold", 1, 4095, 1,
-              "Lower bound for Auto strong threshold. Lower values increase sensitivity."),
-    Parameter("weak_threshold", "Weak threshold", 1, 4095, 1,
-              "Connected faint liquid. Lower values recover more transparent regions and noise.", True),
-    Parameter("weak_threshold_ratio", "Weak / strong ratio", 0.001, 1, 0.001,
-              "Used with Auto weak threshold. Lower ratios admit fainter connected liquid."),
-    Parameter("weak_reach_px", "Weak reach (px)", 0, 200, 1,
-              "Maximum growth from strong foreground. Increase to recover longer faint contours."),
-    Parameter("min_droplet_area_px2", "Min droplet area (px2)", 1, 10000, 1,
-              "Reject smaller components. Increase to remove small artifacts or droplets."),
-    Parameter("morphology_radius_px", "Morphology radius (px)", 0, 15, 1,
-              "Contour cleanup size. Increase to close gaps and remove small artifacts."),
-    Parameter("surface_band_px", "Surface band (px)", 0, 30, 1,
-              "Contact measurement half-height. Increase to tolerate blurred contact boundaries."),
-    Parameter("foreground_depth_px", "Foreground depth (px)", 0, 500, 1,
-              "Detection depth below the surface. Increase to include more lower foreground."),
-    Parameter("min_contact_px", "Min contact pixels (px)", 0, 1000, 1,
-              "Minimum gas-side pixels in the selected component. Increase to reject tiny regions."),
+    Parameter("fps", "Camera rate (fps)", 1, 20000, 1,
+              "Camera recording rate, not preview speed."),
+    Parameter("pixel_size_mm_per_px", "Image scale (mm/px)", 0.000001, 0.1, 0.000001,
+              "Length represented by one image pixel, from your scale calibration."),
+    Parameter("calibration_frame", "Calibration frame", 0, 10000, 1,
+              "Choose an image number after impact where the drop meets the substrate. This image sets the substrate line; changing it can move that line. Auto uses the clean background.", True),
+    Parameter("strong_threshold", "Main drop threshold", 1, 4095, 1,
+              "How different a pixel must be from the clean background to count as liquid. Lower values detect more of the drop, but may also include image noise.", True),
+    Parameter("min_strong_threshold", "Min auto threshold", 1, 4095, 1,
+              "Lowest main threshold allowed in Auto mode. Lower values help detect faint drops, but may include more image noise."),
+    Parameter("weak_threshold", "Faint liquid threshold", 1, 4095, 1,
+              "Allows faint pixels next to clearly detected liquid to join the drop. Lower values can recover transparent edges, but may make the outline too large.", True),
+    Parameter("weak_threshold_ratio", "Faint / main ratio", 0.001, 1, 0.001,
+              "Sets the faint threshold as a fraction of the main threshold when faint detection is Auto. Lower ratios include fainter liquid near the drop."),
+    Parameter("weak_reach_px", "Faint liquid reach (px)", 0, 200, 1,
+              "How far faint liquid can extend from clearly detected liquid. Increase to recover a thin sheet or rim; too much may include unrelated image changes."),
+    Parameter("min_droplet_area_px2", "Min drop area (px2)", 1, 10000, 1,
+              "Ignore detected objects smaller than this area. Increase to remove small specks; too high may discard small drops."),
+    Parameter("morphology_radius_px", "Outline cleanup size (px)", 0, 15, 1,
+              "Size of the image cleanup tool. Increase to close small gaps and remove specks; too much can smooth away real fine details."),
+    Parameter("surface_band_px", "Contact band (px)", 0, 30, 1,
+              "Distance above and below the substrate line used to find contact width. Increase if the contact edge is blurred; too much may count liquid away from the surface."),
+    Parameter("foreground_depth_px", "Search depth below surface (px)", 0, 500, 1,
+              "How far below the substrate line to look for image changes. Increase if the contact region is cut off; too much may include reflections."),
+    Parameter("min_contact_px", "Min visible drop pixels (px)", 0, 1000, 1,
+              "Minimum number of detected pixels above the substrate for an object to be considered a drop. Increase to reject tiny specks; too high may lose small drops."),
     Parameter("surface_y_px", "Surface center y (px)", 0, 2048, 1,
-              "Override the fixed surface position. Larger y moves the surface downward.", True),
-    Parameter("surface_angle_deg", "Surface angle (deg)", -45, 45, 0.1,
-              "Override the surface tilt. Positive angles rotate clockwise.", True),
+              "Position (y-coordinate) of the substrate line at the image center. Larger values move it downward. Auto uses the detected line.", True),
+    Parameter("surface_angle_deg", "Surface tilt (deg)", -45, 45, 0.1,
+              "Tilt of the substrate line. Positive values rotate it clockwise. Adjust to match the visible substrate; Auto uses the detected tilt.", True),
 )
+
+PARAMETER_GROUPS = (
+    ("Experiment and scale", ("fps", "pixel_size_mm_per_px")),
+    ("Substrate and width measurement", ("calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px")),
+    ("Liquid detection", ("strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
+    ("Drop selection and outline cleanup", ("min_droplet_area_px2", "min_contact_px", "morphology_radius_px")),
+)
+STATUS_COLORS = {"busy": "#a66b00", "ready": "#16803c", "error": "#b42318", "idle": "#526071"}
+
+
+class CollapsibleGroup(ttk.Frame):
+    def __init__(self, parent, title: str):
+        super().__init__(parent)
+        self.title = title
+        self.expanded = True
+        self.header = ttk.Button(self, text=f"- {title}", command=self.toggle)
+        self.header.pack(fill="x", pady=(8, 4))
+        self.body = ttk.Frame(self)
+        self.body.pack(fill="x")
+
+    def toggle(self):
+        self.expanded = not self.expanded
+        self.header.configure(text=f"{'-' if self.expanded else '+'} {self.title}")
+        if self.expanded:
+            self.body.pack(fill="x")
+        else:
+            self.body.pack_forget()
+
+
+def responsive_label(parent, **options) -> ttk.Label:
+    label = ttk.Label(parent, wraplength=1, justify="left", **options)
+    parent.bind("<Configure>", lambda event: label.configure(wraplength=max(1, event.width)), add="+")
+    return label
 
 
 class ParameterControl(ttk.Frame):
@@ -161,9 +201,12 @@ class ParameterControl(ttk.Frame):
         self.value = tk.StringVar()
         self.auto = tk.BooleanVar()
         self.valid = True
+        self.initial = None
         header = ttk.Frame(self)
         header.pack(fill="x")
-        ttk.Label(header, text=spec.label).pack(side="left")
+        ttk.Label(header, text=spec.label, wraplength=195).pack(side="left")
+        self.reset_button = ttk.Button(header, text="Reset", width=6, command=self.reset_value)
+        self.reset_button.pack(side="right", padx=(4, 0))
         if spec.automatic:
             ttk.Checkbutton(header, text="Auto", variable=self.auto,
                             command=self._auto_changed).pack(side="right")
@@ -176,12 +219,14 @@ class ParameterControl(ttk.Frame):
         self.entry.bind("<Return>", lambda _: self._typed())
         self.entry.bind("<FocusOut>", lambda _: self._typed())
         self.value.trace_add("write", lambda *_: self._typed())
-        ttk.Label(self, text=spec.description, wraplength=325,
-                  foreground="#526071").pack(anchor="w", pady=(2, 0))
-        self.error = ttk.Label(self, foreground="#b42318", wraplength=325)
-        self.error.pack(anchor="w")
+        responsive_label(self, text=spec.description,
+                         foreground="#526071").pack(fill="x", pady=(2, 0))
+        self.error = responsive_label(self, foreground="#b42318")
+        self.error.pack(fill="x")
 
-    def set_value(self, value: float | None, resolved: float):
+    def set_value(self, value: float | None, resolved: float, remember: bool = True):
+        if remember:
+            self.initial = (value, resolved)
         self.updating = True
         self.auto.set(value is None)
         display = resolved if value is None else value
@@ -193,6 +238,11 @@ class ParameterControl(ttk.Frame):
         self.valid = True
         self.error.configure(text="")
         self._state()
+
+    def reset_value(self):
+        if self.initial is not None:
+            self.set_value(*self.initial)
+            self.changed()
 
     def _state(self):
         state = "disabled" if self.auto.get() else "normal"
@@ -235,7 +285,7 @@ class ParameterControl(ttk.Frame):
             raise ValueError("Enter a valid number.") from None
         if not math.isfinite(number):
             raise ValueError("Enter a finite value.")
-        if self.spec.name in ("strong_threshold", "weak_threshold", "min_strong_threshold", "weak_threshold_ratio"):
+        if self.spec.name in ("strong_threshold", "weak_threshold", "min_strong_threshold", "weak_threshold_ratio", "fps", "pixel_size_mm_per_px"):
             if number <= 0:
                 raise ValueError("Enter a positive value.")
         elif self.spec.name != "surface_angle_deg" and number < self.spec.low:
@@ -244,7 +294,7 @@ class ParameterControl(ttk.Frame):
             raise ValueError("Ratio must be <= 1.")
         if self.spec.name in ("surface_y_px", "weak_reach_px", "min_droplet_area_px2",
                               "morphology_radius_px", "surface_band_px", "foreground_depth_px",
-                              "min_contact_px"):
+                              "min_contact_px", "calibration_frame"):
             if not number.is_integer():
                 raise ValueError("Enter a whole number.")
             return int(number)
@@ -266,6 +316,10 @@ class DropletApp:
         self.preview_future = None
         self.processing = False
         self.preview_ready = False
+        self.play_direction = 0
+        self.play_timer = None
+        self.preview_started = 0.0
+        self.playback_fps = tk.StringVar(value="5")
         self.images = None
         self.photos = []
         self.controls = {}
@@ -275,15 +329,17 @@ class DropletApp:
         self.details = tk.StringVar()
         self.reflection = tk.StringVar(value="auto")
         self.hydrophobic = tk.BooleanVar()
-        self.output_mode = tk.StringVar(value="automatic")
+        self.output_mode = tk.StringVar(value="input")
         self.custom_output = tk.StringVar()
         self.output_summary = tk.StringVar(value="Choose an input folder first.")
         self._build()
         self._lock_parameters(True)
         self._lock_output_controls()
+        self._lock_frame_controls()
         self.custom_output.trace_add("write", lambda *_: self.output_changed())
+        self.playback_fps.trace_add("write", lambda *_: self.playback_speed_changed())
         root.protocol("WM_DELETE_WINDOW", self.close)
-        root.after(50, self._poll)
+        self.poll_timer = root.after(50, self._poll)
 
     def _build(self):
         top = ttk.Frame(self.root, padding=12)
@@ -302,7 +358,7 @@ class DropletApp:
         self.output_radios = []
         for text, value in (
             ("Project outputs (same as automatic mode)", "automatic"),
-            ("Input folder / CV_postprocessing", "input"),
+            ("Input folder / CV postprocessing", "input"),
             ("Custom folder", "custom"),
         ):
             radio = ttk.Radiobutton(modes, text=text, variable=self.output_mode,
@@ -321,7 +377,7 @@ class DropletApp:
         content.pack(fill="both", expand=True, padx=12)
         left = ttk.Frame(content, width=365)
         content.add(left, weight=0)
-        ttk.Label(left, text="Contour Parameters", font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(left, text="Analysis Parameters", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         canvas = tk.Canvas(left, width=350, highlightthickness=0)
         scrollbar = ttk.Scrollbar(left, orient="vertical", command=canvas.yview)
         scrollbar.pack(side="right", fill="y")
@@ -333,21 +389,34 @@ class DropletApp:
         canvas.bind("<Configure>", lambda event: canvas.itemconfigure(window, width=event.width))
         canvas.bind("<Enter>", lambda _: canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-e.delta / 120), "units")))
         canvas.bind("<Leave>", lambda _: canvas.unbind_all("<MouseWheel>"))
-        for spec in PARAMETERS:
-            control = ParameterControl(self.parameter_panel, spec, self.schedule_preview)
-            control.pack(fill="x", padx=(0, 10))
-            self.controls[spec.name] = control
-        ttk.Label(self.parameter_panel, text="Reflection mode").pack(anchor="w", pady=(10, 0))
-        combo = ttk.Combobox(self.parameter_panel, textvariable=self.reflection,
+        self.groups = {}
+        specs = {spec.name: spec for spec in PARAMETERS}
+        for title, names in PARAMETER_GROUPS:
+            group = CollapsibleGroup(self.parameter_panel, title)
+            group.pack(fill="x", padx=(0, 10))
+            self.groups[title] = group
+            for name in names:
+                control = ParameterControl(group.body, specs[name], self.schedule_preview)
+                control.pack(fill="x")
+                self.controls[name] = control
+        surface_group = self.groups["Substrate and width measurement"].body
+        row = ttk.Frame(surface_group)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Label(row, text="Reflection mode").pack(side="left")
+        ttk.Button(row, text="Reset", width=6,
+                   command=lambda: self.reset_choice("reflection_mode")).pack(side="right")
+        self.reflection_combo = ttk.Combobox(surface_group, textvariable=self.reflection,
                              values=("auto", "mirror", "none"), state="readonly")
-        combo.pack(fill="x", padx=(0, 10))
-        combo.bind("<<ComboboxSelected>>", lambda _: self.schedule_preview())
-        ttk.Label(self.parameter_panel, text="Surface calibration method. Use none for weak reflections.",
-                  wraplength=325).pack(anchor="w", pady=4)
-        ttk.Checkbutton(self.parameter_panel, text="Hydrophobic (rim-to-rim)",
-                        variable=self.hydrophobic, command=self.schedule_preview).pack(anchor="w", pady=(8, 0))
-        ttk.Label(self.parameter_panel, text="Measures full rim width instead of surface contact width.",
-                  wraplength=325).pack(anchor="w", pady=4)
+        self.reflection_combo.pack(fill="x")
+        self.reflection_combo.bind("<<ComboboxSelected>>", lambda _: self.schedule_preview())
+        responsive_label(surface_group, text="How to locate the substrate: mirror uses the drop and its reflection; none uses the drop's lower edge. Choose none if the reflection is faint. Auto selects a method.").pack(fill="x", pady=4)
+        row = ttk.Frame(surface_group)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Checkbutton(row, text="Hydrophobic (rim-to-rim)",
+                        variable=self.hydrophobic, command=self.schedule_preview).pack(side="left")
+        ttk.Button(row, text="Reset", width=6,
+                   command=lambda: self.reset_choice("hydrophobic")).pack(side="right")
+        responsive_label(surface_group, text="Use the widest rim-to-rim span for hydrophobic surfaces. Turn off to measure where the drop meets the substrate.").pack(fill="x", pady=4)
         right = ttk.Frame(content, padding=(12, 0, 0, 0))
         content.add(right, weight=1)
         self.preview_panel = ttk.Frame(right)
@@ -363,8 +432,28 @@ class DropletApp:
         self.preview_panel.rowconfigure(0, weight=1)
         self.preview_panel.bind("<Configure>", lambda _: self.draw_images())
         ttk.Label(right, textvariable=self.frame_text).pack(anchor="w", pady=(8, 0))
-        self.frame_slider = ttk.Scale(right, from_=0, to=0, command=self.frame_changed, state="disabled")
-        self.frame_slider.pack(fill="x", pady=4)
+        frame_row = ttk.Frame(right)
+        frame_row.pack(fill="x", pady=4)
+        self.frame_slider = ttk.Scale(frame_row, from_=0, to=0, command=self.frame_changed, state="disabled")
+        self.frame_slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.frame_buttons = []
+        for label, command in (
+            ("First", lambda: self.navigate_frame("first")),
+            ("Prev", lambda: self.navigate_frame(-1)),
+            ("Reverse", lambda: self.play(-1)),
+            ("Pause", self.pause),
+            ("Play", lambda: self.play(1)),
+            ("Next", lambda: self.navigate_frame(1)),
+            ("Last", lambda: self.navigate_frame("last")),
+        ):
+            button = ttk.Button(frame_row, text=label, command=command, width=6)
+            button.pack(side="left", padx=1)
+            self.frame_buttons.append(button)
+        ttk.Label(frame_row, text="Playback fps").pack(side="left", padx=(8, 4))
+        self.speed_entry = ttk.Entry(frame_row, textvariable=self.playback_fps, width=6)
+        self.speed_entry.pack(side="left")
+        self.speed_reset = ttk.Button(frame_row, text="Reset", width=5, command=lambda: self.playback_fps.set("5"))
+        self.speed_reset.pack(side="left", padx=(4, 0))
         ttk.Label(right, textvariable=self.details, wraplength=850).pack(anchor="w")
         self.range_label = ttk.Label(right, text="Working range: -")
         self.range_label.pack(anchor="w", pady=4)
@@ -372,7 +461,109 @@ class DropletApp:
         bottom.pack(fill="x")
         self.progress = ttk.Progressbar(bottom, mode="determinate")
         self.progress.pack(fill="x")
-        ttk.Label(bottom, textvariable=self.status).pack(anchor="w", pady=(5, 0))
+        self.status_label = ttk.Label(bottom, textvariable=self.status, foreground=STATUS_COLORS["idle"])
+        self.status_label.pack(anchor="w", pady=(5, 0))
+
+    def set_status(self, text: str, kind: str | None = None):
+        if kind is None:
+            if text.startswith(("Ready.", "Complete.")):
+                kind = "ready"
+            elif text.startswith("Error:"):
+                kind = "error"
+            elif text.startswith(("Loading", "Finding", "Updating", "Processing")):
+                kind = "busy"
+            else:
+                kind = "idle"
+        self.status.set(text)
+        self.status_label.configure(foreground=STATUS_COLORS[kind])
+
+    def _lock_frame_controls(self):
+        state = "normal" if self.session is not None and not self.processing else "disabled"
+        for button in self.frame_buttons:
+            button.configure(state=state)
+        self.speed_entry.configure(state=state)
+        self.speed_reset.configure(state=state)
+
+    def _playback_rate(self) -> float:
+        try:
+            rate = float(self.playback_fps.get())
+        except ValueError:
+            raise ValueError("Playback fps must be a positive number.") from None
+        if not math.isfinite(rate) or rate <= 0:
+            raise ValueError("Playback fps must be a finite positive number.")
+        return rate
+
+    def playback_speed_changed(self):
+        try:
+            self._playback_rate()
+        except ValueError as error:
+            self.pause()
+            self.set_status(f"Error: {error}", "error")
+            return
+        if self.play_direction:
+            if self.play_timer is not None:
+                self.root.after_cancel(self.play_timer)
+                self.play_timer = None
+            self._schedule_playback_step()
+        elif self.preview_ready:
+            self.set_status("Ready. Adjust parameters or process all frames.")
+
+    def pause(self):
+        was_playing = self.play_direction != 0
+        self.play_direction = 0
+        if self.play_timer is not None:
+            self.root.after_cancel(self.play_timer)
+            self.play_timer = None
+        if was_playing and self.preview_ready:
+            self.set_status("Ready. Preview playback paused.")
+
+    def navigate_frame(self, destination: str | int):
+        if self.session is None or self.processing:
+            return
+        self.pause()
+        last = len(self.session.prepared.files) - 1
+        current = round(self.frame_slider.get())
+        index = 0 if destination == "first" else last if destination == "last" else current + destination
+        self.frame_slider.set(min(last, max(0, index)))
+
+    def play(self, direction: int):
+        if self.session is None or self.processing:
+            return
+        try:
+            self._playback_rate()
+            self.overrides()
+        except ValueError as error:
+            self.pause()
+            self.set_status(f"Error: {error}", "error")
+            return
+        self.pause()
+        self.play_direction = direction
+        self.set_status("Playing forward..." if direction > 0 else "Playing in reverse...", "busy")
+        if self.preview_ready:
+            self._playback_step()
+
+    def _playback_step(self):
+        self.play_timer = None
+        if not self.play_direction or self.session is None or self.processing:
+            return
+        index = round(self.frame_slider.get()) + self.play_direction
+        if not 0 <= index < len(self.session.prepared.files):
+            self.pause()
+            self.set_status("Ready. Reached the end of the working range.")
+            return
+        self.frame_slider.set(index)
+
+    def _schedule_playback_step(self):
+        if not self.play_direction or not self.preview_ready or self.play_timer is not None:
+            return
+        try:
+            period = 1.0 / self._playback_rate()
+        except ValueError as error:
+            self.pause()
+            self.set_status(f"Error: {error}", "error")
+            return
+        delay = max(1, round(1000 * (period - (time.monotonic() - self.preview_started))))
+        self.play_timer = self.root.after(delay, self._playback_step)
 
     def _submit(self, tag: str, generation: int, work: Callable):
         def run():
@@ -380,17 +571,20 @@ class DropletApp:
                 result = work()
                 self.messages.put((tag, generation, result))
             except Exception as error:
-                self.messages.put(("error", generation, str(error)))
+                critical = tag == "processed" or not isinstance(error, ValueError)
+                self.messages.put(("error", generation, (str(error), critical)))
         return self.executor.submit(run)
 
     def choose_folder(self):
         folder = filedialog.askdirectory(title="Choose One Image Folder", mustexist=True)
         if not folder:
             return
+        self.pause()
         self.generation += 1
         generation = self.generation
         self.session = None
         self.preview_ready = False
+        self._lock_frame_controls()
         self._lock_output_controls()
         self.output_summary.set("Loading input folder...")
         self._lock_parameters(True)
@@ -404,7 +598,7 @@ class DropletApp:
         self.details.set("")
         self.frame_text.set("Frame: -")
         self.range_label.configure(text="Working range: -")
-        self.status.set("Loading background and calibration...")
+        self.set_status("Loading background and calibration...")
         self.choose.configure(state="disabled")
         self._submit("loaded", generation, lambda: PreviewSession.open(
             Path(folder), lambda text: self.messages.put(("status", generation, text)),
@@ -445,8 +639,13 @@ class DropletApp:
             self.output_summary.set(
                 f"CSV: {config.output_csv} | Debug overlays: {config.debug_dir}"
             )
+            if self.preview_ready:
+                self.batch_config()
+                self._playback_rate()
+                self.set_status("Ready. Adjust parameters or process all frames.")
         except ValueError as error:
             self.output_summary.set(str(error))
+            self.set_status(f"Error: {error}", "error")
         self._update_process_state()
 
     def choose_output_folder(self):
@@ -459,9 +658,7 @@ class DropletApp:
     def _initialize_output(self):
         config = self.session.base_config
         folder = config.output_csv.parent.resolve()
-        self.output_mode.set(
-            "automatic" if folder == default_output_dir(config.input_dir) else "custom"
-        )
+        self.output_mode.set("input")
         self.custom_output.set(str(folder))
         self.output_changed()
 
@@ -474,6 +671,7 @@ class DropletApp:
             "weak_threshold": session.prepared.weak_threshold,
             "surface_y_px": session.prepared.surface_line.center_y_int(),
             "surface_angle_deg": session.prepared.surface_line.angle_deg,
+            "calibration_frame": frame_number_from_filename(session.prepared.files[-1]),
         }
         for name, control in self.controls.items():
             value = getattr(session.base_config, name)
@@ -484,7 +682,17 @@ class DropletApp:
     def overrides(self) -> dict:
         result = {name: control.get_value() for name, control in self.controls.items()}
         result.update(reflection_mode=self.reflection.get(), hydrophobic=self.hydrophobic.get())
+        frame = result["calibration_frame"]
+        if frame is not None and frame not in {frame_number_from_filename(path) for path in self.session.prepared.files}:
+            raise ValueError("Calibration frame must be an existing image number in the working range.")
         return result
+
+    def reset_choice(self, name: str):
+        if self.session is None or self.processing:
+            return
+        variable = self.reflection if name == "reflection_mode" else self.hydrophobic
+        variable.set(getattr(self.session.base_config, name))
+        self.schedule_preview()
 
     def reset_parameters(self):
         self._set_controls()
@@ -508,22 +716,27 @@ class DropletApp:
     def schedule_preview(self):
         if self.session is None or self.processing:
             return
+        if self.play_timer is not None:
+            self.root.after_cancel(self.play_timer)
+            self.play_timer = None
         self.generation += 1
         self.preview_ready = False
         self._cancel_preview()
         try:
             self.overrides()
-        except ValueError:
+        except ValueError as error:
+            self.pause()
             self.process.configure(state="disabled")
-            self.status.set("Correct the highlighted parameter before previewing or processing.")
+            self.set_status(f"Error: {error} Correct the parameter to continue.", "error")
             return
         self.process.configure(state="disabled")
-        self.status.set("Updating current frame...")
-        self.pending = self.root.after(200, self._preview)
+        self.set_status("Updating current frame...")
+        self.pending = self.root.after(0 if self.play_direction else 200, self._preview)
 
     def _preview(self):
         self.pending = None
         overrides = self.overrides()
+        self.preview_started = time.monotonic()
         index = min(len(self.session.prepared.files) - 1, max(0, round(self.frame_slider.get())))
         session = self.session
         self.preview_future = self._submit("preview", self.generation,
@@ -551,16 +764,16 @@ class DropletApp:
     def _lock_parameters(self, locked: bool):
         def walk(widget):
             for child in widget.winfo_children():
-                if isinstance(child, (ttk.Entry, ttk.Scale, ttk.Checkbutton, ttk.Combobox)):
+                if isinstance(child, (ttk.Entry, ttk.Scale, ttk.Checkbutton, ttk.Combobox, ttk.Button)):
                     child.configure(state="disabled" if locked else "normal")
                 walk(child)
         walk(self.parameter_panel)
+        for group in self.groups.values():
+            group.header.configure(state="normal")
         if not locked:
             for control in self.controls.values():
                 control._state()
-            for child in self.parameter_panel.winfo_children():
-                if isinstance(child, ttk.Combobox):
-                    child.configure(state="readonly")
+            self.reflection_combo.configure(state="readonly")
 
     def process_all(self):
         if self.session is None or self.processing:
@@ -568,19 +781,21 @@ class DropletApp:
         try:
             config = self.batch_config()
         except ValueError as error:
-            self.status.set(str(error))
+            self.set_status(f"Error: {error}", "error")
             return
+        self.pause()
         self._cancel_preview()
         self.generation += 1
         generation = self.generation
         self.processing = True
+        self._lock_frame_controls()
         self._lock_output_controls()
         self._lock_parameters(True)
         for button in (self.choose, self.reset, self.process):
             button.configure(state="disabled")
         self.frame_slider.configure(state="disabled")
         self.progress.configure(value=0)
-        self.status.set("Processing all frames with current settings...")
+        self.set_status("Processing all frames with current settings...")
 
         def run():
             def progress(done, total):
@@ -597,6 +812,7 @@ class DropletApp:
 
     def _finish_processing(self):
         self.processing = False
+        self._lock_frame_controls()
         self._lock_output_controls()
         self._lock_parameters(self.session is None)
         self.choose.configure(state="normal")
@@ -604,6 +820,7 @@ class DropletApp:
         self.frame_slider.configure(state="normal" if self.session else "disabled")
 
     def _poll(self):
+        self.poll_timer = None
         if self.closed.is_set():
             return
         try:
@@ -616,6 +833,7 @@ class DropletApp:
                     self._initialize_output()
                     self._set_controls()
                     self._lock_parameters(False)
+                    self._lock_frame_controls()
                     files = result.prepared.files
                     self.frame_slider.configure(from_=0, to=max(0, len(files) - 1), state="normal")
                     self.frame_slider.set(result.initial_index)
@@ -638,35 +856,51 @@ class DropletApp:
                     }
                     for name, value in resolved.items():
                         if self.controls[name].auto.get():
-                            self.controls[name].set_value(None, value)
+                            self.controls[name].set_value(None, value, remember=False)
                     self.images = before, after
                     self.details.set(details)
                     self.draw_images()
                     self.preview_ready = True
                     self._update_process_state()
-                    self.status.set("Ready. Adjust parameters or process all frames.")
+                    try:
+                        self.batch_config()
+                        self._playback_rate()
+                        if self.play_direction:
+                            self.set_status("Playing forward..." if self.play_direction > 0 else "Playing in reverse...", "busy")
+                        else:
+                            self.set_status("Ready. Adjust parameters or process all frames.")
+                    except ValueError as error:
+                        self.set_status(f"Error: {error}", "error")
+                    self._schedule_playback_step()
                 elif tag == "status":
-                    self.status.set(result)
+                    self.set_status(result)
                 elif tag == "progress":
                     done, total = result
                     self.progress.configure(maximum=total, value=done)
-                    self.status.set(f"Processing frames: {done} / {total}")
+                    self.set_status(f"Processing frames: {done} / {total}")
                 elif tag == "processed":
                     self._finish_processing()
                     self._update_process_state()
                     count, path = result
-                    self.status.set(f"Complete. Wrote {count} rows to {path}")
+                    self.set_status(f"Complete. Wrote {count} rows to {path}")
                 elif tag == "error":
                     self.preview_ready = False
                     self._finish_processing()
                     self.process.configure(state="disabled")
-                    self.status.set(f"Error: {result}")
-                    messagebox.showerror("Processing Error", result, parent=self.root)
+                    self.pause()
+                    text, critical = result
+                    self.set_status(f"Error: {text}", "error")
+                    if critical:
+                        messagebox.showerror("Processing Error", text, parent=self.root)
         except queue.Empty:
             pass
-        self.root.after(50, self._poll)
+        self.poll_timer = self.root.after(50, self._poll)
 
     def close(self):
+        if self.poll_timer is not None:
+            self.root.after_cancel(self.poll_timer)
+            self.poll_timer = None
+        self.pause()
         self.closed.set()
         self._cancel_preview()
         self.executor.shutdown(wait=False, cancel_futures=True)

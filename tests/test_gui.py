@@ -14,7 +14,7 @@ import tifffile
 
 from droplet_impact_cv.analysis import analyze_sequence
 from droplet_impact_cv.gui import (
-    PARAMETERS, DropletApp, ParameterControl, PreviewSession, load_folder_config, resolve_output_config,
+    PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, load_folder_config, resolve_output_config,
 )
 from droplet_impact_cv.cli import default_output_dir
 from droplet_impact_cv.imaging import read_image
@@ -129,6 +129,18 @@ class PreviewTests(unittest.TestCase):
         analyze_sequence(config, progress=lambda done, total: events.append((done, total)))
         self.assertEqual(events, [(number, 5) for number in range(6)])
 
+    def test_experiment_overrides_change_units_time_and_calibration_in_batch(self):
+        session = PreviewSession.open(self.folder)
+        overrides = {"fps": 2000.0, "pixel_size_mm_per_px": 0.02, "calibration_frame": 5}
+        session.preview(3, overrides)
+        self.assertEqual(session.prepared.config.calibration_frame, 5)
+        config = replace(session.base_config, debug_dir=None, **overrides)
+        rows = analyze_sequence(config)
+        self.assertEqual(rows[1].time_ms - rows[0].time_ms, 0.5)
+        self.assertEqual(rows[0].pixel_size_mm_per_px, 0.02)
+        self.assertEqual(rows[0].calibration_frame, 5)
+        self.assertAlmostEqual(rows[3].ref_d_eq_area_mm, rows[3].ref_d_eq_area_px * 0.02)
+
 
 class GuiControlTests(unittest.TestCase):
     def setUp(self):
@@ -172,6 +184,34 @@ class GuiControlTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 control.get_value()
 
+    def test_individual_reset_restores_value_and_auto_without_changing_baseline(self):
+        changed = []
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        control = ParameterControl(self.root, spec, lambda: changed.append(True))
+        control.set_value(None, 1500.0)
+        control.auto.set(False)
+        control.value.set("2000")
+        control.reset_button.invoke()
+        self.assertIsNone(control.get_value())
+        self.assertTrue(control.auto.get())
+        self.assertEqual(control.value.get(), "1500.0")
+        control.set_value(None, 2200.0, remember=False)
+        control.reset_button.invoke()
+        self.assertEqual(control.value.get(), "1500.0")
+        self.assertTrue(changed)
+
+    def test_experiment_parameters_validate_positive_values_and_frame_integers(self):
+        for name in ("fps", "pixel_size_mm_per_px", "calibration_frame"):
+            spec = next(spec for spec in PARAMETERS if spec.name == name)
+            control = ParameterControl(self.root, spec, lambda: None)
+            control.set_value(1, 1)
+            control.value.set("-1")
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                control.get_value()
+        control.value.set("1.5")
+        with self.assertRaises(ValueError):
+            control.get_value()
+
 
 class GuiWorkflowTests(unittest.TestCase):
     def test_load_preview_scrub_edit_reset_and_process(self):
@@ -204,8 +244,8 @@ class GuiWorkflowTests(unittest.TestCase):
             pump(lambda: app.status.get().startswith("Ready."))
             self.assertEqual(app.session.ref_frame, 4)
             self.assertEqual(len(app.photos), 2)
-            self.assertEqual(app.output_mode.get(), "custom")
-            self.assertEqual(app.batch_config().debug_dir, self.folder / "debug_overlays")
+            self.assertEqual(app.output_mode.get(), "input")
+            self.assertEqual(app.batch_config().debug_dir, self.folder / "CV_postprocessing" / "debug_overlays")
             app.output_mode.set("automatic")
             app.output_changed()
             self.assertEqual(app.batch_config().output_csv.parent, default_output_dir(self.folder))
@@ -237,6 +277,100 @@ class GuiWorkflowTests(unittest.TestCase):
         self.assertFalse(output.exists())
         self.assertFalse(debug.exists())
         self.assertEqual(self.config_file.read_bytes(), original)
+
+    def test_group_reset_playback_and_error_feedback(self):
+        PreviewTests.setUp(self)
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        root.withdraw()
+        app = DropletApp(root)
+        self.addCleanup(app.close)
+
+        def pump(condition):
+            deadline = time.monotonic() + 10
+            while not condition():
+                root.update()
+                if time.monotonic() > deadline:
+                    self.fail(app.status.get())
+                time.sleep(0.005)
+            root.update()
+
+        with patch("droplet_impact_cv.gui.filedialog.askdirectory", return_value=str(self.folder)), \
+                patch("droplet_impact_cv.gui.messagebox.showerror") as popup:
+            app.choose_folder()
+            self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["busy"])
+            pump(lambda: app.preview_ready)
+            self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["ready"])
+            self.assertEqual(app.playback_fps.get(), "5")
+            self.assertEqual(app.controls["fps"].get_value(), 4000.0)
+            group = app.groups["Experiment and scale"]
+            group.header.invoke()
+            self.assertFalse(group.expanded)
+            group.header.invoke()
+            self.assertTrue(group.expanded)
+            app.controls["fps"].value.set("2000")
+            app.controls["weak_reach_px"].value.set("60")
+            app.controls["fps"].reset_button.invoke()
+            self.assertEqual(app.controls["fps"].get_value(), 4000.0)
+            self.assertEqual(app.controls["weak_reach_px"].get_value(), 60)
+            app.hydrophobic.set(True)
+            app.reset_choice("hydrophobic")
+            self.assertFalse(app.hydrophobic.get())
+            app.reflection.set("none")
+            app.reset_choice("reflection_mode")
+            self.assertEqual(app.reflection.get(), "auto")
+            pump(lambda: app.preview_ready)
+            app.navigate_frame("first")
+            pump(lambda: app.preview_ready and round(app.frame_slider.get()) == 0)
+            app.playback_fps.set("40")
+            app.play(1)
+            pump(lambda: app.play_direction == 0 and round(app.frame_slider.get()) == 4)
+            app.play(-1)
+            pump(lambda: app.play_direction == 0 and round(app.frame_slider.get()) == 0)
+            app.navigate_frame("last")
+            pump(lambda: app.preview_ready and round(app.frame_slider.get()) == 4)
+            app.navigate_frame(-1)
+            pump(lambda: app.preview_ready and round(app.frame_slider.get()) == 3)
+            app.navigate_frame(1)
+            pump(lambda: app.preview_ready and round(app.frame_slider.get()) == 4)
+            app.play(-1)
+            app.pause()
+            pump(lambda: app.preview_ready)
+            paused_index = round(app.frame_slider.get())
+            deadline = time.monotonic() + 0.1
+            while time.monotonic() < deadline:
+                root.update()
+                time.sleep(0.005)
+            self.assertEqual(round(app.frame_slider.get()), paused_index)
+            app.playback_fps.set("0")
+            self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["error"])
+            self.assertEqual(app.play_direction, 0)
+            popup.assert_not_called()
+            app.speed_reset.invoke()
+            self.assertEqual(app.playback_fps.get(), "5")
+            app.controls["calibration_frame"].auto.set(False)
+            app.controls["calibration_frame"].value.set("999")
+            self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["error"])
+            self.assertEqual(str(app.process["state"]), "disabled")
+            popup.assert_not_called()
+            app.controls["calibration_frame"].reset_button.invoke()
+            pump(lambda: app.preview_ready)
+            # Recoverable preview-setting errors are red and never show a dialog.
+            def preview_error():
+                raise ValueError("Invalid preview setting")
+            app._submit("preview", app.generation, preview_error)
+            root.update()
+            pump(lambda: app.status.get().startswith("Error:"))
+            popup.assert_not_called()
+            self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["error"])
+            # Critical IO/batch errors retain the existing modal dialog.
+            def batch_error():
+                raise PermissionError("Cannot write results")
+            app._submit("processed", app.generation, batch_error)
+            pump(lambda: popup.called)
+            popup.assert_called_once()
 
 
 if __name__ == "__main__":
