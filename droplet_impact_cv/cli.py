@@ -113,7 +113,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--pixel-size-mm-per-px",
-        "--pixel-size-mm",
         dest="pixel_size_mm_per_px",
         type=positive_float,
         default=DEFAULT_PIXEL_SIZE_MM_PER_PX,
@@ -209,7 +208,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--min-droplet-area-px2",
-        "--min-droplet-area-px",
         dest="min_droplet_area_px2",
         type=positive_float,
         metavar="AREA",
@@ -241,7 +239,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--min-contact-px",
-        "--min-contact-pixels",
         dest="min_contact_px",
         type=nonnegative_int,
         metavar="COUNT",
@@ -253,7 +250,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--hydrophobic",
-        "--HO",
         dest="hydrophobic",
         type=zero_or_one,
         default=0,

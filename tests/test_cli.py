@@ -38,7 +38,7 @@ class CliConfigTests(unittest.TestCase):
             (input_dir / "cv_config.txt").write_text(
                 "# Experiment settings\n"
                 "--fps 4000\n"
-                "--pixel-size-mm 0.01682736321\n"
+                "--pixel-size-mm-per-px 0.01682736321\n"
                 "--calibration-frame 9105\n"
                 "--reflection-mode none\n",
                 encoding="utf-8",
@@ -57,7 +57,7 @@ class CliConfigTests(unittest.TestCase):
             input_dir = Path(temporary_dir)
             (input_dir / "cv_config.txt").write_text(
                 "--fps 4000\n"
-                "--pixel-size-mm 0.01682736321\n"
+                "--pixel-size-mm-per-px 0.01682736321\n"
                 "--include-pre-impact\n",
                 encoding="utf-8",
             )
@@ -166,17 +166,36 @@ class CliConfigTests(unittest.TestCase):
         self.assertEqual(config.min_contact_px, 25)
         self.assertEqual(config.debug_interval, 5)
 
-    def test_canonical_unit_names_and_legacy_aliases_match(self) -> None:
-        parser = build_parser()
-        canonical = config_from_args(parser.parse_args([
+    def test_canonical_unit_names_map_to_analysis_config(self) -> None:
+        config = config_from_args(build_parser().parse_args([
             "--pixel-size-mm-per-px", "0.01", "--min-droplet-area-px2", "400",
             "--min-contact-px", "20", "--hydrophobic", "1",
         ]))
-        legacy = config_from_args(parser.parse_args([
-            "--pixel-size-mm", "0.01", "--min-droplet-area-px", "400",
-            "--min-contact-pixels", "20", "--HO", "1",
-        ]))
-        self.assertEqual(canonical, legacy)
+        self.assertEqual(config.pixel_size_mm_per_px, 0.01)
+        self.assertEqual(config.min_droplet_area_px2, 400)
+        self.assertEqual(config.min_contact_px, 20)
+        self.assertTrue(config.hydrophobic)
+
+    def test_old_config_options_are_rejected_even_with_current_cli_overrides(self) -> None:
+        options = (
+            ("--pixel-size-mm", "--pixel-size-mm-per-px"),
+            ("--min-droplet-area-px", "--min-droplet-area-px2"),
+            ("--min-contact-pixels", "--min-contact-px"),
+            ("--HO", "--hydrophobic"),
+        )
+        with TemporaryDirectory() as temporary_dir:
+            input_dir = Path(temporary_dir)
+            for old_option, current_option in options:
+                (input_dir / "cv_config.txt").write_text(
+                    f"{old_option} 1\n", encoding="utf-8"
+                )
+                for cli_options in ([], [current_option, "1"]):
+                    with self.subTest(option=old_option, cli_options=cli_options):
+                        errors = StringIO()
+                        with redirect_stderr(errors), self.assertRaises(SystemExit) as raised:
+                            parse_args([str(input_dir), *cli_options])
+                        self.assertEqual(raised.exception.code, 2)
+                        self.assertIn(f"unrecognized arguments: {old_option}", errors.getvalue())
 
     def test_debug_interval_defaults_to_one(self) -> None:
         config = config_from_args(build_parser().parse_args([]))
@@ -186,17 +205,17 @@ class CliConfigTests(unittest.TestCase):
     def test_hydrophobic_option_can_be_loaded_from_config_or_overridden_by_cli(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)
-            (input_dir / "cv_config.txt").write_text("--HO 1\n", encoding="utf-8")
+            (input_dir / "cv_config.txt").write_text("--hydrophobic 1\n", encoding="utf-8")
 
             configured = config_from_args(parse_args([str(input_dir)]))
-            overridden = config_from_args(parse_args([str(input_dir), "--HO", "0"]))
+            overridden = config_from_args(parse_args([str(input_dir), "--hydrophobic", "0"]))
 
         self.assertTrue(configured.hydrophobic)
         self.assertFalse(overridden.hydrophobic)
 
     def test_hydrophobic_option_must_be_zero_or_one(self) -> None:
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-            build_parser().parse_args(["--HO", "2"])
+            build_parser().parse_args(["--hydrophobic", "2"])
 
     def test_renamed_parameters_are_rejected(self) -> None:
         parser = build_parser()
