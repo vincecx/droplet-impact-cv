@@ -23,7 +23,7 @@ from .analysis import (
 from .cli import CONFIG_FILENAME, build_parser, config_from_args, default_output_dir, parse_args
 from .imaging import frame_number_from_filename
 from .models import AnalysisConfig
-from .output import write_csv
+from .output import RUN_PARAMS_FILENAME, write_csv, write_run_params
 from .visualization import render_debug_overlay
 
 
@@ -1075,6 +1075,7 @@ class DropletApp:
             if self.closed.is_set():
                 raise RuntimeError("Operation cancelled.")
             write_csv(config.output_csv, measurements)
+            write_run_params(config.output_csv.parent / RUN_PARAMS_FILENAME, config)
             return len(measurements), config.output_csv
 
         self._submit("processed", generation, run)

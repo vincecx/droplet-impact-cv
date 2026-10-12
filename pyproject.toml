@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "imagecodecs>=2025.3.30",
+    "matplotlib>=3.10.9",
     "numpy>=2.2.6",
     "opencv-python>=4.13.0.92",
     "scipy>=1.15.3",
@@ -19,6 +20,10 @@ droplet-impact-cv-gui = "droplet_impact_cv.gui:main"
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
+
+[[tool.uv.index]]
+url = "https://mirrors.aliyun.com/pypi/simple/"
+default = true
 
 [tool.setuptools.packages.find]
 include = ["droplet_impact_cv*"]

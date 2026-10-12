@@ -19,7 +19,7 @@ from .models import (
     REFLECTION_MODES,
     AnalysisConfig,
 )
-from .output import write_csv
+from .output import RUN_PARAMS_FILENAME, write_csv, write_run_params
 
 
 CONFIG_FILENAME = "cv_config.txt"
@@ -404,6 +404,7 @@ def main(argv: list[str] | None = None) -> None:
     config = config_from_args(args)
     measurements = analyze_sequence(config)
     write_csv(config.output_csv, measurements)
+    write_run_params(config.output_csv.parent / RUN_PARAMS_FILENAME, config)
 
     impact_frame = measurements[0].impact_frame if measurements else None
     valid = [row for row in measurements if not math.isnan(row.d_spread_mm)]

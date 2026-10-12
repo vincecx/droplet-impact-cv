@@ -1,11 +1,40 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from .models import FrameMeasurement
+from . import __version__
+from .models import AnalysisConfig, FrameMeasurement
+
+RUN_PARAMS_FILENAME = "run_params.json"
+
+
+def run_params_payload(config: AnalysisConfig) -> dict:
+    """Serialize the effective runtime configuration to JSON-safe data."""
+    parameters = asdict(config)
+    for key, value in list(parameters.items()):
+        if isinstance(value, Path):
+            parameters[key] = str(value)
+    return {
+        "schema_version": 1,
+        "package_version": __version__,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "parameters": parameters,
+    }
+
+
+def write_run_params(path: Path, config: AnalysisConfig) -> Path:
+    """Write the parameters actually used for a run as UTF-8 JSON (LF)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        json.dump(run_params_payload(config), handle, indent=2)
+        handle.write("\n")
+    return path
 
 
 def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
