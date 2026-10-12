@@ -16,7 +16,7 @@ import tifffile
 from droplet_impact_cv.analysis import analyze_sequence
 from droplet_impact_cv.gui import (
     PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, PreviewViewport,
-    load_folder_config, resolve_output_config, surface_values_from_points,
+    load_folder_config, resolve_output_config, save_folder_config, surface_values_from_points,
 )
 from droplet_impact_cv.cli import default_output_dir
 from droplet_impact_cv.imaging import read_image
@@ -95,6 +95,48 @@ class PreviewTests(unittest.TestCase):
         self.config_file.write_text("--HO 1\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "unrecognized arguments"):
             load_folder_config(self.folder)
+
+    def test_save_round_trip_preserves_auto_paths_flags_and_frame_range(self):
+        config = replace(
+            load_folder_config(self.folder), fps=1234.5, hydrophobic=True,
+            strong_threshold=None, weak_threshold=None, surface_y_px=None,
+            surface_angle_deg=-1.25, calibration_frame=None, start_frame=2, end_frame=5,
+            output_csv=self.folder / "output's folder" / "result.csv",
+            debug_dir=self.folder / "output's folder" / "debug overlays",
+        )
+        save_folder_config(config)
+        self.assertEqual(load_folder_config(self.folder), config)
+        self.assertFalse((self.folder / "cv_config.txt.bak").exists())
+        self.assertEqual(list(self.folder.glob(".cv_config-*.tmp")), [])
+
+    def test_save_backup_replaces_stale_backup_and_can_create_new_config(self):
+        original = self.config_file.read_bytes()
+        backup = self.folder / "cv_config.txt.bak"
+        backup.write_text("stale", encoding="utf-8")
+        config = replace(load_folder_config(self.folder), fps=2000, include_pre_impact=False)
+        save_folder_config(config, backup=True)
+        self.assertEqual(backup.read_bytes(), original)
+        self.assertEqual(load_folder_config(self.folder), config)
+        self.config_file.unlink()
+        save_folder_config(config, backup=True)
+        self.assertEqual(load_folder_config(self.folder), config)
+        self.assertEqual(backup.read_bytes(), original)
+
+    def test_failed_save_restores_original_config(self):
+        original = self.config_file.read_bytes()
+        config = load_folder_config(self.folder)
+        original_replace = Path.replace
+
+        def fail_install(path, target):
+            if path.suffix == ".tmp":
+                raise PermissionError("Cannot install config")
+            return original_replace(path, target)
+
+        with patch.object(Path, "replace", fail_install):
+            with self.assertRaises(PermissionError):
+                save_folder_config(config, backup=True)
+        self.assertEqual(self.config_file.read_bytes(), original)
+        self.assertEqual(list(self.folder.glob(".cv_config-*.tmp")), [])
 
     def test_initial_preview_is_reference_and_discovery_stops_there(self):
         with patch("droplet_impact_cv.analysis.read_image", wraps=read_image) as reads:
@@ -176,6 +218,31 @@ class GuiControlTests(unittest.TestCase):
         self.root.withdraw()
         self.root.update_idletasks()
         self.addCleanup(self.root.destroy)
+
+    def test_save_dialog_cancel_backup_and_overwrite(self):
+        with TemporaryDirectory() as folder:
+            path = Path(folder) / "cv_config.txt"
+            path.write_text("--fps 4000\n", encoding="utf-8")
+            original = path.read_bytes()
+            config = replace(load_folder_config(Path(folder)), fps=2000)
+            # Exercise the GUI command without loading an image sequence.
+            app = SimpleNamespace(
+                session=SimpleNamespace(), processing=False, selecting_surface=False,
+                root=self.root, batch_config=lambda: config, set_status=lambda *args: None,
+            )
+            with patch("droplet_impact_cv.gui.messagebox.askyesnocancel", return_value=None):
+                DropletApp.save_parameters(app)
+            self.assertEqual(path.read_bytes(), original)
+            with patch("droplet_impact_cv.gui.messagebox.askyesnocancel", return_value=True):
+                DropletApp.save_parameters(app)
+            backup = path.with_name("cv_config.txt.bak")
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(load_folder_config(Path(folder)), config)
+            app.batch_config = lambda: replace(config, fps=3000)
+            with patch("droplet_impact_cv.gui.messagebox.askyesnocancel", return_value=False):
+                DropletApp.save_parameters(app)
+            self.assertEqual(load_folder_config(Path(folder)).fps, 3000)
+            self.assertEqual(backup.read_bytes(), original)
 
     def test_disabled_slider_tracks_loaded_auto_values_and_reset(self):
         spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")

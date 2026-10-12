@@ -3,13 +3,15 @@ from __future__ import annotations
 import argparse
 import math
 import queue
+import shlex
+import tempfile
 import threading
 import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, font, messagebox, ttk
 from typing import Callable
 
 import cv2
@@ -18,7 +20,7 @@ import numpy as np
 from .analysis import (
     PreparedSequence, analyze_sequence, is_reference_measurement, prepare_sequence,
 )
-from .cli import config_from_args, default_output_dir, parse_args
+from .cli import CONFIG_FILENAME, build_parser, config_from_args, default_output_dir, parse_args
 from .imaging import frame_number_from_filename
 from .models import AnalysisConfig
 from .output import write_csv
@@ -37,6 +39,51 @@ def load_folder_config(folder: Path) -> AnalysisConfig:
             return config_from_args(parse_args([str(folder)]))
     except SystemExit as error:
         raise ValueError(errors.getvalue().strip()) from error
+
+
+def save_folder_config(config: AnalysisConfig, backup: bool = False) -> Path:
+    """Write reloadable CLI settings, preserving Auto by omitting None values."""
+    lines = ["# Droplet Impact CV analysis settings"]
+    for action in build_parser()._actions:
+        if not action.option_strings or action.dest == "help":
+            continue
+        value = getattr(config, action.dest)
+        if value is None:
+            continue
+        option = next(option for option in action.option_strings if option.startswith("--"))
+        if isinstance(action, argparse.BooleanOptionalAction):
+            lines.append(option if value else "--no-" + option[2:])
+        else:
+            if isinstance(value, Path):
+                value = value.resolve().as_posix()
+            elif isinstance(value, bool):
+                value = int(value)
+            lines.append(f"{option} {shlex.quote(str(value))}")
+    path = config.input_dir / CONFIG_FILENAME
+    backup_path = path.with_name(path.name + ".bak")
+    # Finish writing before moving the original or replacing the destination.
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=config.input_dir,
+                                     prefix=".cv_config-", suffix=".tmp", delete=False) as handle:
+        temporary = Path(handle.name)
+        try:
+            handle.write("\n".join(lines) + "\n")
+        except BaseException:
+            handle.close()
+            temporary.unlink(missing_ok=True)
+            raise
+    moved = False
+    try:
+        if backup and path.exists():
+            path.replace(backup_path)
+            moved = True
+        temporary.replace(path)
+    except OSError:
+        if moved:
+            backup_path.replace(path)
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
+    return path
 
 
 def resolve_output_config(
@@ -215,7 +262,7 @@ class CollapsibleGroup(ttk.Frame):
         super().__init__(parent)
         self.title = title
         self.expanded = True
-        self.header = ttk.Button(self, text=f"- {title}", command=self.toggle)
+        self.header = ttk.Button(self, text=f"- {title}", command=self.toggle, style="Bold.TButton")
         self.header.pack(fill="x", pady=(8, 4))
         self.body = ttk.Frame(self)
         self.body.pack(fill="x")
@@ -392,15 +439,23 @@ class DropletApp:
         self.poll_timer = root.after(50, self._poll)
 
     def _build(self):
+        self.bold_font = font.nametofont("TkDefaultFont").copy()
+        self.bold_font.configure(weight="bold")
+        style = ttk.Style(self.root)
+        style.configure("Bold.TButton", font=self.bold_font)
+        style.configure("Playback.TButton", font=("Segoe UI Symbol", 12))
         top = ttk.Frame(self.root, padding=12)
         top.pack(fill="x")
         self.choose = ttk.Button(top, text="Choose Folder...", command=self.choose_folder)
         self.choose.pack(side="left")
-        ttk.Label(top, textvariable=self.folder, wraplength=650).pack(side="left", padx=12)
-        self.process = ttk.Button(top, text="Process All Frames", command=self.process_all, state="disabled")
+        self.process = ttk.Button(top, text="Process All Frames", command=self.process_all, state="disabled", style="Bold.TButton")
         self.process.pack(side="right")
-        self.reset = ttk.Button(top, text="Reset Parameters", command=self.reset_parameters, state="disabled")
+        self.reset = ttk.Button(top, text="Reset Parameters", command=self.reset_parameters, state="disabled", style="Bold.TButton")
         self.reset.pack(side="right", padx=8)
+        self.save = ttk.Button(top, text="Save cv_config.txt", command=self.save_parameters,
+                               state="disabled", style="Bold.TButton")
+        self.save.pack(side="right")
+        responsive_label(top, textvariable=self.folder).pack(side="left", fill="x", expand=True, padx=12)
         output_panel = ttk.LabelFrame(self.root, text="Output Folder", padding=8)
         output_panel.pack(fill="x", padx=12, pady=(0, 8))
         modes = ttk.Frame(output_panel)
@@ -507,15 +562,15 @@ class DropletApp:
         self.frame_slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.frame_buttons = []
         for label, command in (
-            ("First", lambda: self.navigate_frame("first")),
-            ("Prev", lambda: self.navigate_frame(-1)),
-            ("Reverse", lambda: self.play(-1)),
-            ("Pause", self.pause),
-            ("Play", lambda: self.play(1)),
-            ("Next", lambda: self.navigate_frame(1)),
-            ("Last", lambda: self.navigate_frame("last")),
+            ("⏮", lambda: self.navigate_frame("first")),
+            ("|◀", lambda: self.navigate_frame(-1)),
+            ("◀", lambda: self.play(-1)),
+            ("⏸", self.pause),
+            ("▶", lambda: self.play(1)),
+            ("▶|", lambda: self.navigate_frame(1)),
+            ("⏭", lambda: self.navigate_frame("last")),
         ):
-            button = ttk.Button(frame_row, text=label, command=command, width=6)
+            button = ttk.Button(frame_row, text=label, command=command, width=3, style="Playback.TButton")
             button.pack(side="left", padx=1)
             self.frame_buttons.append(button)
         ttk.Label(frame_row, text="Playback fps").pack(side="left", padx=(8, 4))
@@ -665,6 +720,7 @@ class DropletApp:
         self.draw_images()
         self.process.configure(state="disabled")
         self.reset.configure(state="disabled")
+        self.save.configure(state="disabled")
         self.frame_slider.configure(state="disabled")
         self.folder.set(folder)
         self.details.set("")
@@ -692,6 +748,8 @@ class DropletApp:
         )
 
     def _update_process_state(self):
+        self.save.configure(state="normal" if self.session is not None and not self.processing
+                            and not self.selecting_surface else "disabled")
         ready = self.preview_ready and self.session is not None and not self.processing and not self.selecting_surface
         if ready:
             try:
@@ -770,6 +828,28 @@ class DropletApp:
         self.end_surface_selection()
         self._set_controls()
         self.schedule_preview()
+
+    def save_parameters(self):
+        if self.session is None or self.processing or self.selecting_surface:
+            return
+        try:
+            config = self.batch_config()
+            path = config.input_dir / CONFIG_FILENAME
+            backup = messagebox.askyesnocancel(
+                "Save cv_config.txt",
+                "Back up the existing cv_config.txt before saving?\n\n"
+                "Yes: rename it to cv_config.txt.bak (replace any previous backup).\n"
+                "No: overwrite without a backup.\nCancel: do not save.",
+                parent=self.root,
+            )
+            if backup is None:
+                return
+            save_folder_config(config, backup=backup)
+        except (OSError, ValueError) as error:
+            self.set_status(f"Error: {error}", "error")
+            messagebox.showerror("Save Configuration Error", str(error), parent=self.root)
+            return
+        self.set_status(f"Complete. Saved current parameters to {path}")
 
     def frame_changed(self, value):
         if self.session is None or self.processing:
@@ -952,7 +1032,7 @@ class DropletApp:
         self._lock_frame_controls()
         self._lock_output_controls()
         self._lock_parameters(True)
-        for button in (self.choose, self.reset, self.process):
+        for button in (self.choose, self.save, self.reset, self.process):
             button.configure(state="disabled")
         self.frame_slider.configure(state="disabled")
         self.progress.configure(value=0)
@@ -978,6 +1058,7 @@ class DropletApp:
         self._lock_parameters(self.session is None)
         self.choose.configure(state="normal")
         self.reset.configure(state="normal" if self.session else "disabled")
+        self.save.configure(state="normal" if self.session else "disabled")
         self.frame_slider.configure(state="normal" if self.session else "disabled")
 
     def _poll(self):
@@ -1005,6 +1086,7 @@ class DropletApp:
                     ))
                     self.choose.configure(state="normal")
                     self.reset.configure(state="normal")
+                    self.save.configure(state="normal")
                     self.frame_changed(result.initial_index)
                 elif tag == "preview":
                     before, after, details = result

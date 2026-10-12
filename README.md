@@ -36,7 +36,11 @@ uv run droplet-impact-cv-gui
 
 Select one input folder in the GUI; command-line analysis overrides are not
 accepted. Settings follow **GUI changes > cv_config.txt > program defaults**.
-Changes are not written back to `cv_config.txt`. Reset restores the values loaded
+**Save cv_config.txt** writes current analysis settings and output paths to the
+input folder. Choose whether to rename the existing file to `cv_config.txt.bak`
+(replacing any previous backup), overwrite without backup, or cancel. Auto
+settings remain automatic when reloaded. Preview changes are saved only with
+this button. Reset restores the values loaded
 when the folder was opened, including their Auto state.
 
 The initial preview is `ref_frame`, or the first frame if no reference is found.
