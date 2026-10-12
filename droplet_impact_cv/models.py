@@ -42,7 +42,7 @@ class AnalysisConfig:
     surface_search_start_px: int = 50
     surface_drop_delta: float = 100.0
     surface_band_px: int = DEFAULT_SURFACE_BAND_PX
-    hydrophobic: bool = False
+    rim_to_rim: bool = False
     foreground_depth_px: int = 220
     top_exclusion_ratio: float = DEFAULT_TOP_EXCLUSION_RATIO
     min_contact_px: int = 30
@@ -53,6 +53,10 @@ class AnalysisConfig:
     debug_interval: int = 1
     start_frame: int | None = None
     end_frame: int | None = None
+    # Fixed experiment metadata; these fields do not affect measurements.
+    substrate: str | None = None
+    hydrophilicity: str | None = None
+    substrate_temp_deg_c: float | None = None
 
 
 @dataclass(frozen=True)

@@ -18,6 +18,7 @@ from droplet_impact_cv.imaging import (
     estimate_vertical_symmetry_y,
     foreground_mask,
     find_image_files,
+    frame_number_from_filename,
     make_structure,
     read_image,
     select_calibration_component,
@@ -32,6 +33,12 @@ from droplet_impact_cv.models import (
 
 
 class BackgroundTests(unittest.TestCase):
+    def test_frame_number_uses_last_six_digits_after_numeric_experiment_name(self):
+        self.assertEqual(frame_number_from_filename(Path("2026.9.14 Al-60-5 最低高度 常温3000010.tif")), 10)
+        self.assertEqual(frame_number_from_filename(Path("capture_000005.jpg")), 5)
+        with self.assertRaises(ValueError):
+            frame_number_from_filename(Path("capture_00005.tif"))
+
     def test_mirror_candidate_depth_uses_configured_cutoff_inclusively(self):
         mask = np.zeros((120, 100), dtype=bool)
         mask[20:76, 30:70] = True
@@ -272,7 +279,7 @@ class ComponentMeasurementTests(unittest.TestCase):
             min_droplet_area_px2=1,
             min_contact_px=1,
             min_impact_width_px=60,
-            hydrophobic=True,
+            rim_to_rim=True,
             debug_dir=None,
         )
 
@@ -282,10 +289,10 @@ class ComponentMeasurementTests(unittest.TestCase):
         self.assertEqual(measurement.d_rim_px, 80.0)
         self.assertFalse(touches_surface(measurement, config))
 
-    def test_hydrophobic_measurement_uses_rim_to_rim_width(self) -> None:
+    def test_rim_to_rim_measurement_uses_rim_to_rim_width(self) -> None:
         mask = np.zeros((100, 140), dtype=np.uint8)
         # The footprint at the surface is 40 px, while the lifted rim span is
-        # 80 px. A hydrophobic measurement must use the latter.
+        # 80 px. A rim_to_rim measurement must use the latter.
         mask[30:45, 30:110] = 1
         mask[45:51, 50:90] = 1
         surface_line = SurfaceLine(50.0, angle_deg=0.0)
@@ -293,13 +300,13 @@ class ComponentMeasurementTests(unittest.TestCase):
             input_dir=Path("input"), output_csv=Path("output.csv"),
             min_droplet_area_px2=1, min_contact_px=1, debug_dir=None,
         )
-        hydrophobic_config = AnalysisConfig(
+        rim_to_rim_config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, hydrophobic=True, debug_dir=None,
+            min_droplet_area_px2=1, min_contact_px=1, rim_to_rim=True, debug_dir=None,
         )
 
         contact_measurement = component_measurement(mask, surface_line, contact_config)
-        rim_measurement = component_measurement(mask, surface_line, hydrophobic_config)
+        rim_measurement = component_measurement(mask, surface_line, rim_to_rim_config)
 
         self.assertEqual(contact_measurement.d_spread_px, 40.0)
         self.assertEqual(rim_measurement.d_spread_px, 80.0)
@@ -308,7 +315,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         self.assertEqual(rim_measurement.contact_bbox, (50, 50, 89, 50))
         self.assertEqual(rim_measurement.rim_bbox, (30, 30, 109, 30))
 
-    def test_hydrophobic_rim_measurement_is_parallel_to_surface(self) -> None:
+    def test_rim_to_rim_rim_measurement_is_parallel_to_surface(self) -> None:
         mask = np.zeros((160, 180), dtype=np.uint8)
         # A 0.5-slope, 80-px-wide parallelogram: the longest diameter must
         # follow the surface direction, rather than the image x axis.
@@ -320,7 +327,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         surface_line = SurfaceLine(80.0, angle_deg=np.degrees(np.arctan(0.5)))
         config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, hydrophobic=True, debug_dir=None,
+            min_droplet_area_px2=1, min_contact_px=1, rim_to_rim=True, debug_dir=None,
         )
 
         measurement = component_measurement(mask, surface_line, config)
@@ -334,12 +341,12 @@ class ComponentMeasurementTests(unittest.TestCase):
         mask = np.zeros((120, 140), dtype=np.uint8)
         mask[20:50, 30:70] = 1
         mask[25:45, 40:60] = 0  # Enclosed bright interior belongs to the drop.
-        for hydrophobic in (False, True):
-            with self.subTest(hydrophobic=hydrophobic):
+        for rim_to_rim in (False, True):
+            with self.subTest(rim_to_rim=rim_to_rim):
                 config = AnalysisConfig(
                     input_dir=Path("input"), output_csv=Path("output.csv"),
                     min_droplet_area_px2=1, min_contact_px=1,
-                    hydrophobic=hydrophobic, debug_dir=None, top_exclusion_ratio=0,
+                    rim_to_rim=rim_to_rim, debug_dir=None, top_exclusion_ratio=0,
                 )
                 measurement = component_measurement(
                     mask, SurfaceLine(70.0, angle_deg=0.0), config

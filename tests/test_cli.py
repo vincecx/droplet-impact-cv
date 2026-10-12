@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import json
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -16,6 +17,55 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_spaced_unicode_folder_metadata_cli_override_and_json_output(self):
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir) / "2026.9.14 Al-60-5-SHO 最低高度 常温3"
+            folder.mkdir()
+            (folder / "cv_config.txt").write_text(
+                '--substrate "Al surface 名称"\n--hydrophilicity SHO\n'
+                '--substrate_temp_deg_c 24\n--rim-to-rim 1\n', encoding="utf-8",
+            )
+            config = config_from_args(parse_args([str(folder)]))
+            self.assertEqual(config.input_dir, folder)
+            self.assertEqual(config.output_csv.parent.name, folder.name)
+            self.assertEqual(config.substrate, "Al surface 名称")
+            self.assertEqual(config.hydrophilicity, "SHO")
+            self.assertEqual(config.substrate_temp_deg_c, 24.0)
+            self.assertTrue(config.rim_to_rim)
+            output_csv = folder / "output folder" / "result.csv"
+            with patch("droplet_impact_cv.cli.analyze_sequence", return_value=[]) as analyze, \
+                    redirect_stdout(StringIO()):
+                main([str(folder), "--output-csv", str(output_csv),
+                      "--substrate", "Other surface", "--hydrophilicity", "HI",
+                      "--substrate_temp_deg_c", "-5.5", "--rim-to-rim", "0"])
+            payload = json.loads((output_csv.parent / "run_params.json").read_text(encoding="utf-8"))
+            params = payload["parameters"]
+            self.assertEqual(payload["package_version"], "0.4.0")
+            self.assertEqual(params["input_dir"], str(folder))
+            self.assertEqual(params["substrate"], "Other surface")
+            self.assertEqual(params["hydrophilicity"], "HI")
+            self.assertEqual(params["substrate_temp_deg_c"], -5.5)
+            self.assertFalse(params["rim_to_rim"])
+            self.assertNotIn("hydrophobic", params)
+            self.assertEqual(analyze.call_args.args[0].substrate, params["substrate"])
+
+    def test_metadata_defaults_and_wettability_choices(self):
+        parser = build_parser()
+        defaults = config_from_args(parser.parse_args([]))
+        self.assertIsNone(defaults.substrate)
+        self.assertIsNone(defaults.hydrophilicity)
+        self.assertIsNone(defaults.substrate_temp_deg_c)
+        for value in ("SHI", "HI", "HO", "SHO"):
+            with self.subTest(value=value):
+                self.assertEqual(parser.parse_args(["--hydrophilicity", value]).hydrophilicity, value)
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["--hydrophilicity", "invalid"])
+
+    def test_hydrophobic_cli_option_is_rejected(self):
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as raised:
+            build_parser().parse_args(["--hydrophobic", "1", "--rim-to-rim", "0"])
+        self.assertEqual(raised.exception.code, 2)
+
     def test_top_exclusion_defaults_config_override_and_bounds(self):
         parser = build_parser()
         self.assertEqual(config_from_args(parser.parse_args([])).top_exclusion_ratio, 0.25)
@@ -245,19 +295,20 @@ class CliConfigTests(unittest.TestCase):
     def test_canonical_unit_names_map_to_analysis_config(self) -> None:
         config = config_from_args(build_parser().parse_args([
             "--pixel-size-mm-per-px", "0.01", "--min-droplet-area-px2", "400",
-            "--min-contact-px", "20", "--hydrophobic", "1",
+            "--min-contact-px", "20", "--rim-to-rim", "1",
         ]))
         self.assertEqual(config.pixel_size_mm_per_px, 0.01)
         self.assertEqual(config.min_droplet_area_px2, 400)
         self.assertEqual(config.min_contact_px, 20)
-        self.assertTrue(config.hydrophobic)
+        self.assertTrue(config.rim_to_rim)
 
     def test_old_config_options_are_rejected_even_with_current_cli_overrides(self) -> None:
         options = (
             ("--pixel-size-mm", "--pixel-size-mm-per-px"),
             ("--min-droplet-area-px", "--min-droplet-area-px2"),
             ("--min-contact-pixels", "--min-contact-px"),
-            ("--HO", "--hydrophobic"),
+            ("--HO", "--rim-to-rim"),
+            ("--hydrophobic", "--rim-to-rim"),
         )
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)
@@ -278,20 +329,20 @@ class CliConfigTests(unittest.TestCase):
 
         self.assertEqual(config.debug_interval, 1)
 
-    def test_hydrophobic_option_can_be_loaded_from_config_or_overridden_by_cli(self) -> None:
+    def test_rim_to_rim_option_can_be_loaded_from_config_or_overridden_by_cli(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)
-            (input_dir / "cv_config.txt").write_text("--hydrophobic 1\n", encoding="utf-8")
+            (input_dir / "cv_config.txt").write_text("--rim-to-rim 1\n", encoding="utf-8")
 
             configured = config_from_args(parse_args([str(input_dir)]))
-            overridden = config_from_args(parse_args([str(input_dir), "--hydrophobic", "0"]))
+            overridden = config_from_args(parse_args([str(input_dir), "--rim-to-rim", "0"]))
 
-        self.assertTrue(configured.hydrophobic)
-        self.assertFalse(overridden.hydrophobic)
+        self.assertTrue(configured.rim_to_rim)
+        self.assertFalse(overridden.rim_to_rim)
 
-    def test_hydrophobic_option_must_be_zero_or_one(self) -> None:
+    def test_rim_to_rim_option_must_be_zero_or_one(self) -> None:
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
-            build_parser().parse_args(["--hydrophobic", "2"])
+            build_parser().parse_args(["--rim-to-rim", "2"])
 
     def test_renamed_parameters_are_rejected(self) -> None:
         parser = build_parser()

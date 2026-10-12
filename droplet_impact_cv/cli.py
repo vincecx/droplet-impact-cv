@@ -98,6 +98,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output CSV path. Default: <project-dir>/outputs/<input-folder>/spreading_diameter.csv",
     )
     parser.add_argument(
+        "--substrate",
+        default=None,
+        help="Surface name recorded as experiment metadata; does not affect measurements.",
+    )
+    parser.add_argument(
+        "--hydrophilicity",
+        choices=("SHI", "HI", "HO", "SHO"),
+        default=None,
+        help="Surface wettability recorded as experiment metadata; does not affect measurements.",
+    )
+    parser.add_argument(
+        "--substrate_temp_deg_c",
+        type=float,
+        default=None,
+        help="Surface temperature in degrees Celsius, recorded as experiment metadata only.",
+    )
+    parser.add_argument(
         "--start-frame",
         type=positive_int,
         default=None,
@@ -286,13 +303,13 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--hydrophobic",
-        dest="hydrophobic",
+        "--rim-to-rim",
+        dest="rim_to_rim",
         type=zero_or_one,
         default=0,
         metavar="{0,1}",
         help=(
-            "Use rim-to-rim width for hydrophobic surfaces (1), instead of "
+            "Use rim-to-rim width (1), instead of "
             "the surface contact-line width (0). Default: 0"
         ),
     )
@@ -385,7 +402,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         min_droplet_area_px2=int(args.min_droplet_area_px2),
         morphology_radius_px=args.morphology_radius_px,
         surface_band_px=args.surface_band_px,
-        hydrophobic=bool(args.hydrophobic),
+        rim_to_rim=bool(args.rim_to_rim),
         foreground_depth_px=args.foreground_depth_px,
         top_exclusion_ratio=args.top_exclusion_ratio,
         min_contact_px=args.min_contact_px,
@@ -396,6 +413,9 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         debug_interval=args.debug_interval,
         start_frame=args.start_frame,
         end_frame=args.end_frame,
+        substrate=args.substrate,
+        hydrophilicity=args.hydrophilicity,
+        substrate_temp_deg_c=args.substrate_temp_deg_c,
     )
 
 

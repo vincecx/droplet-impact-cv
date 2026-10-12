@@ -448,7 +448,7 @@ class DropletApp:
         self.frame_text = tk.StringVar(value="Frame: -")
         self.details = tk.StringVar()
         self.reflection = tk.StringVar(value="auto")
-        self.hydrophobic = tk.BooleanVar()
+        self.rim_to_rim = tk.BooleanVar()
         self.output_mode = tk.StringVar(value="input")
         self.custom_output = tk.StringVar()
         self.output_summary = tk.StringVar(value="Choose an input folder first.")
@@ -545,11 +545,11 @@ class DropletApp:
         responsive_label(surface_group, text="How to locate the substrate: mirror uses the drop and its reflection; none uses the drop's lower edge. Choose none if the reflection is faint. Auto selects a method.").pack(fill="x", pady=4)
         row = ttk.Frame(surface_group)
         row.pack(fill="x", pady=(8, 0))
-        ttk.Checkbutton(row, text="Hydrophobic (rim-to-rim)",
-                        variable=self.hydrophobic, command=self.schedule_preview).pack(side="left")
+        ttk.Checkbutton(row, text="Rim-to-rim width",
+                        variable=self.rim_to_rim, command=self.schedule_preview).pack(side="left")
         ttk.Button(row, text="Reset", width=6,
-                   command=lambda: self.reset_choice("hydrophobic")).pack(side="right")
-        responsive_label(surface_group, text="Use the widest rim-to-rim span for hydrophobic surfaces. Turn off to measure where the drop meets the substrate.").pack(fill="x", pady=4)
+                   command=lambda: self.reset_choice("rim_to_rim")).pack(side="right")
+        responsive_label(surface_group, text="Use the widest rim-to-rim span. Turn off to measure where the drop meets the substrate.").pack(fill="x", pady=4)
         right = ttk.Frame(content, padding=(12, 0, 0, 0))
         content.add(right, weight=1)
         self.preview_panel = ttk.Frame(right)
@@ -833,11 +833,11 @@ class DropletApp:
             value = getattr(session.base_config, name)
             control.set_value(value, resolved.get(name, value))
         self.reflection.set(session.base_config.reflection_mode)
-        self.hydrophobic.set(session.base_config.hydrophobic)
+        self.rim_to_rim.set(session.base_config.rim_to_rim)
 
     def overrides(self) -> dict:
         result = {name: control.get_value() for name, control in self.controls.items()}
-        result.update(reflection_mode=self.reflection.get(), hydrophobic=self.hydrophobic.get())
+        result.update(reflection_mode=self.reflection.get(), rim_to_rim=self.rim_to_rim.get())
         frames = {frame_number_from_filename(path) for path in self.session.prepared.files}
         for name, label in (("surface_calibration_frame", "Surface calibration frame"),
                             ("droplet_size_ref_frame", "Droplet size reference frame")):
@@ -848,7 +848,7 @@ class DropletApp:
     def reset_choice(self, name: str):
         if self.session is None or self.processing:
             return
-        variable = self.reflection if name == "reflection_mode" else self.hydrophobic
+        variable = self.reflection if name == "reflection_mode" else self.rim_to_rim
         variable.set(getattr(self.session.base_config, name))
         self.schedule_preview()
 

@@ -39,7 +39,7 @@ class OutputTests(unittest.TestCase):
         self.assertEqual(put_text.call_args.args[4], 0.7)
         self.assertNotIn("D0", put_text.call_args.args[1])
 
-    def test_hydrophobic_overlay_draws_contact_and_rim_measurements(self) -> None:
+    def test_rim_to_rim_overlay_draws_contact_and_rim_measurements(self) -> None:
         image = np.zeros((80, 100), dtype=np.float32)
         mask = np.zeros_like(image, dtype=bool)
         with TemporaryDirectory() as temporary_dir:

@@ -21,7 +21,7 @@ from .models import (
 
 SURFACE_MASK_BELOW_TOLERANCE_PX = 0
 DEFAULT_CALIBRATION_EDGE_GAP_PX = 20
-FRAME_NUMBER_PATTERN = re.compile(r"(?<!\d)(\d{6})$")
+FRAME_NUMBER_PATTERN = re.compile(r"(\d{6})$")
 SUPPORTED_IMAGE_SUFFIXES = (".tif", ".tiff", ".jpg", ".jpeg")
 MAX_REFLECTION_SYMMETRY_ERROR = 0.1
 
@@ -397,8 +397,8 @@ def rim_to_rim_segment(
 
     Each foreground pixel is projected onto axes parallel and perpendicular to
     the surface. Pixels within the same one-pixel perpendicular band form one
-    candidate chord. The longest candidate defines the hydrophobic
-    rim-to-rim diameter and its displayed measurement line.
+    candidate chord. The longest candidate defines the rim-to-rim
+    diameter and its displayed measurement line.
     """
     ys, xs = np.nonzero(component)
     if xs.size == 0:
@@ -553,7 +553,7 @@ def component_measurement(
     # as for the volume-equivalent diameter and the two projection spans.
     d_eq_area_px = math.sqrt(4.0 * int(component.sum()) / math.pi)
 
-    # Hydrophobic droplets are measured rim-to-rim. Otherwise, the diameter is
+    # In rim-to-rim mode, measure the full span. Otherwise, the diameter is
     # the silhouette width where it meets the fixed surface-line band. Both
     # measurements are taken before clipping, so pixels just below the line
     # still participate in the contact-line measurement.
@@ -574,7 +574,7 @@ def component_measurement(
             (contact_x_max - contact_x_min + 1)
             * math.sqrt(1.0 + surface_line.slope**2)
         )
-    if config.hydrophobic:
+    if config.rim_to_rim:
         rim_measurement = rim_to_rim_segment(component, surface_line)
     else:
         rim_measurement = None
@@ -605,7 +605,7 @@ def component_measurement(
             surface_parallel_line,
             surface_normal_line,
         ) = aligned_dimensions
-    if config.hydrophobic:
+    if config.rim_to_rim:
         if rim_measurement is None:
             return ComponentMeasurement(0.0, area, None, component)
         d_spread_px, rim_bbox = rim_measurement

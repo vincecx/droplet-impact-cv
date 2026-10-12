@@ -104,4 +104,8 @@ def write_debug_overlay(
         rim_bbox, d_contact_mm, d_rim_mm,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), overlay)
+    # OpenCV's Windows filename handling does not support all Unicode paths.
+    success, encoded = cv2.imencode(path.suffix, overlay)
+    if not success:
+        raise OSError(f"Cannot encode debug overlay: {path}")
+    path.write_bytes(encoded.tobytes())

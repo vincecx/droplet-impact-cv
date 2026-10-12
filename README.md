@@ -33,11 +33,20 @@ uv run droplet-impact-cv path/to/image_sequences \
 
 Input images must be grayscale TIFF or 8-bit JPEG, with a six-digit frame number
 at the end of each filename. For example, `capture_000005.tif` is reported as
-frame 5 even when it is the first file in the input directory.
+frame 5 even when it is the first file in the input directory. The last six
+digits are the frame number, including when the experiment name ends in a digit:
+`example3000010.tif` is frame 10.
 
-The first frame in the selected working range must be a clean background with
-no droplet. `--start-frame` and `--end-frame` restrict that range using inclusive
-filename frame numbers; the first selected frame becomes the background.
+Folder names may contain spaces or non-ASCII characters. Quote the entire input
+path when running from a shell, for example:
+
+```powershell
+uv run droplet-impact-cv "path/to/示例 example"
+```
+
+`--start-frame` and `--end-frame` restrict the working range using inclusive
+filename frame numbers. The first frame in the selected working range should
+be a clean background with no droplet outside of `--top-exclusion-ratio` range.
 
 ## GUI workflow
 
@@ -90,13 +99,27 @@ option syntax; blank lines and `#` comments are allowed:
 
 ```text
 # Camera and scale
---fps 4000
---pixel-size-mm-per-px 0.01682736321
+--fps 1000
+--pixel-size-mm-per-px 0.01
+
+# Fixed experiment metadata (does not affect measurements)
+--substrate Substrate-name-1
+--hydrophilicity SHO
+--substrate_temp_deg_c 24
 
 # Surface calibration
---surface-calibration-frame 9105
+--surface-calibration-frame 10
 --reflection-mode mirror
 ```
+
+`--substrate`, `--hydrophilicity`, and `--substrate_temp_deg_c` record the surface
+name, wettability (`SHI`, `HI`, `HO`, or `SHO`), and temperature in degrees Celsius.
+They default to `null`, remain fixed during GUI preview and batch processing,
+and are written under `parameters` in the output folder's `run_params.json`.
+Quote metadata values containing spaces in `cv_config.txt`, such as
+`--substrate "Surface 1"`. The GUI preserves this metadata when saving settings.
+Use `--rim-to-rim {0,1}` to select the diameter measurement; the old
+`--hydrophobic` option is rejected in both CLI arguments and configuration files.
 
 Settings take precedence in this order, from highest to lowest:
 
@@ -139,7 +162,7 @@ clockwise; without calibration or an explicit angle, the fallback is `-0.6` deg.
 
 `d_spread` is the outermost liquid span within the substrate band
 (`--surface-band-px`, default 3 px); it is zero when the drop is clear of that
-band. With `--hydrophobic 1`, it is the full rim-to-rim width instead.
+band. With `--rim-to-rim 1`, it is the full rim-to-rim width instead.
 
 Impact is always detected from contact-line width reaching
 `--min-impact-width-px`. By default, time is zero at impact and pre-impact rows
@@ -205,9 +228,9 @@ and `_px2` for area. Pixel size uses `_mm_per_px`; `fps` is the camera frame rat
 | Columns | Meaning |
 | --- | --- |
 | `filename`, `frame_number`, `time_ms` | Source file, filename frame number, and time. |
-| `d_spread_px`, `d_spread_mm` | Spreading diameter selected by `--hydrophobic`. |
+| `d_spread_px`, `d_spread_mm` | Spreading diameter selected by `--rim-to-rim`. |
 | `d_contact_px`, `d_contact_mm` | Surface contact-line diameter. |
-| `d_rim_px`, `d_rim_mm` | Rim-to-rim diameter, available in hydrophobic mode. |
+| `d_rim_px`, `d_rim_mm` | Rim-to-rim diameter, available in rim-to-rim mode. |
 | `droplet_size_ref_frame` | Frame used for both reference equivalent diameters. |
 | `ref_d_eq_volume_px`, `ref_d_eq_volume_mm` | Volume-equivalent reference diameter. |
 | `ref_d_eq_area_px`, `ref_d_eq_area_mm` | Area-equivalent reference diameter. |
@@ -236,7 +259,10 @@ alphabetically by name, ignoring leading dashes.
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `--droplet-size-ref-frame` | automatic | Frame used for both reference equivalent diameters; Auto uses the first frame whose substrate clearance is at most half its volume-equivalent diameter. |
-| `--hydrophobic {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
+| `--rim-to-rim {0,1}` | `0` | Set to `1` to measure the silhouette's rim-to-rim width instead of its contact-line width. |
+| `--substrate` | `None` | Surface name; experiment metadata only. |
+| `--hydrophilicity {SHI,HI,HO,SHO}` | `None` | Surface wettability; experiment metadata only. |
+| `--substrate_temp_deg_c` | `None` | Surface temperature in degrees Celsius; experiment metadata only. |
 | `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
 | `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |

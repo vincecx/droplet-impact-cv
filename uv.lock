@@ -256,7 +256,7 @@ wheels = [
 
 [[package]]
 name = "droplet-impact-cv"
-version = "0.3.0"
+version = "0.4.0"
 source = { editable = "." }
 dependencies = [
     { name = "imagecodecs", version = "2025.3.30", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.11'" },

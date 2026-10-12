@@ -50,7 +50,8 @@ class PreviewTests(unittest.TestCase):
     def setUp(self):
         self.temporary = TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.folder = Path(self.temporary.name)
+        self.folder = Path(self.temporary.name) / "input 数据 with spaces"
+        self.folder.mkdir()
         self.config_file = self.folder / "cv_config.txt"
         self.config_file.write_text(
             "--fps 4000\n--strong-threshold 1000\n--weak-threshold 500\n"
@@ -116,7 +117,8 @@ class PreviewTests(unittest.TestCase):
 
     def test_save_round_trip_preserves_auto_paths_flags_and_frame_range(self):
         config = replace(
-            load_folder_config(self.folder), fps=1234.5, hydrophobic=True,
+            load_folder_config(self.folder), fps=1234.5, rim_to_rim=True,
+            substrate="Al surface 名称", hydrophilicity="SHO", substrate_temp_deg_c=24.5,
             strong_threshold=None, weak_threshold=None, surface_y_px=None,
             surface_angle_deg=-1.25, surface_calibration_frame=None,
             droplet_size_ref_frame=3, start_frame=2, end_frame=5, top_exclusion_ratio=0.4,
@@ -127,6 +129,25 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(load_folder_config(self.folder), config)
         self.assertFalse((self.folder / "cv_config.txt.bak").exists())
         self.assertEqual(list(self.folder.glob(".cv_config-*.tmp")), [])
+
+    def test_metadata_is_fixed_during_preview_and_does_not_affect_measurements(self):
+        baseline = replace(load_folder_config(self.folder), debug_dir=None)
+        with self.config_file.open("a", encoding="utf-8") as handle:
+            handle.write('--substrate "Al surface"\n--hydrophilicity SHO\n--substrate_temp_deg_c 24\n')
+        session = PreviewSession.open(self.folder)
+        session.preview(1, {"strong_threshold": 1100, "rim_to_rim": True})
+        self.assertEqual(session.prepared.config.substrate, "Al surface")
+        self.assertEqual(session.prepared.config.hydrophilicity, "SHO")
+        self.assertEqual(session.prepared.config.substrate_temp_deg_c, 24.0)
+        # Serialize actual batch measurements to compare NaNs and all CSV fields.
+        from droplet_impact_cv.output import write_csv
+        for rim_to_rim in (False, True):
+            with self.subTest(rim_to_rim=rim_to_rim):
+                expected = self.folder / "baseline.csv"
+                actual = self.folder / "metadata.csv"
+                write_csv(expected, analyze_sequence(replace(baseline, rim_to_rim=rim_to_rim)))
+                write_csv(actual, analyze_sequence(replace(session.base_config, debug_dir=None, rim_to_rim=rim_to_rim)))
+                self.assertEqual(expected.read_bytes(), actual.read_bytes())
 
     def test_save_backup_replaces_stale_backup_and_can_create_new_config(self):
         original = self.config_file.read_bytes()
@@ -607,9 +628,9 @@ class GuiWorkflowTests(unittest.TestCase):
             app.controls["fps"].reset_button.invoke()
             self.assertEqual(app.controls["fps"].get_value(), 4000.0)
             self.assertEqual(app.controls["weak_reach_px"].get_value(), 60)
-            app.hydrophobic.set(True)
-            app.reset_choice("hydrophobic")
-            self.assertFalse(app.hydrophobic.get())
+            app.rim_to_rim.set(True)
+            app.reset_choice("rim_to_rim")
+            self.assertFalse(app.rim_to_rim.get())
             app.reflection.set("none")
             app.reset_choice("reflection_mode")
             self.assertEqual(app.reflection.get(), "auto")
