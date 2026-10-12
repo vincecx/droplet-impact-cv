@@ -1,183 +1,206 @@
 # droplet-impact-cv
 
-Measure droplet spreading diameter from side-view high-speed TIFF/JPEG sequences,
-using a fully automatic CLI or a semi-automatic GUI.
+Measure droplet spreading diameter from side-view high-speed TIFF/JPEG sequences
+with a fully automatic CLI or a semi-automatic GUI.
 
-Input images must be grayscale TIFF or 8-bit JPEG, with a six-digit frame number
-at the end of each filename. For example, `capture_000005.tif` is reported as
-frame 5 even when it is the first file in the input directory. The first frame in
-the selected working range must be a clean background with no droplet.
+## Quick start
 
-## Usage
+Install the environment and dependencies with `uv`:
 
 ```bash
 uv sync
 ```
 
-### Fully automatic CLI mode
+Choose a mode:
 
-An experiment-specific command typically looks like this:
+| Mode | Use it to | Start command |
+| --- | --- | --- |
+| GUI | Preview frames, adjust analysis parameters, and process one folder. | `uv run droplet-impact-cv-gui` |
+| CLI | Process a folder using saved settings and command-line options. | `uv run droplet-impact-cv path/to/image_sequences` |
+
+The GUI requires Python with Tk support (`tkinter`). An experiment-specific CLI
+command can supply custom settings:
 
 ```bash
 uv run droplet-impact-cv path/to/image_sequences \
-  --fps 8000 \
-  --pixel-size-mm-per-px 0.00711883341 \
-  --calibration-frame 61 \
-  --reflection-mode auto
+  --fps 1000 \
+  --pixel-size-mm-per-px 0.001 \
+  --surface-calibration-frame 61 \
+  --reflection-mode mirror
 ```
 
-### Semi-automatic GUI mode
+## Prepare the input
 
-The GUI requires Python with Tk support (`tkinter`).
+Input images must be grayscale TIFF or 8-bit JPEG, with a six-digit frame number
+at the end of each filename. For example, `capture_000005.tif` is reported as
+frame 5 even when it is the first file in the input directory.
 
-```bash
-uv run droplet-impact-cv-gui
-```
+The first frame in the selected working range must be a clean background with
+no droplet. `--start-frame` and `--end-frame` restrict that range using inclusive
+filename frame numbers; the first selected frame becomes the background.
 
-Select one input folder in the GUI; command-line analysis overrides are not
-accepted. Settings follow **GUI changes > cv_config.txt > program defaults**.
-**Save cv_config.txt** writes current analysis settings and output paths to the
-input folder. Choose whether to rename the existing file to `cv_config.txt.bak`
-(replacing any previous backup), overwrite without backup, or cancel. Auto
-settings remain automatic when reloaded. Preview changes are saved only with
-this button. Reset restores the values loaded
-when the folder was opened, including their Auto state.
+## GUI workflow
 
-The initial preview is `ref_frame`, or the first frame if no reference is found.
-Preview changes process the selected frame and any required calibration/threshold
-updates, without rerunning the full sequence or writing outputs. Use the mouse
-wheel over either preview to zoom around the cursor. Full processing uses the
-current GUI settings for the configured working range.
+1. Use **Choose Folder...** to open one image folder and load its settings.
+2. Inspect **Before Processing** and **After Processing**, then adjust the grouped analysis parameters. The initial preview shows the selected droplet size reference frame, or the first frame if Auto finds no reference.
+3. Use **Save cv_config.txt** to persist the current settings if needed.
+4. Use **Process All Frames** to analyze the configured working range with the current GUI settings and write the CSV and overlays.
 
-**Select surface line manually** in the substrate parameter group lets you click
-two points in the preview to select surface line. This updates calibration frame,
-surface center y, and surface tilt, with Auto checkbox unchanged. Note that values
-with Auto enabled could be subsequently re-updated by the normal automatic
-calculation.
+### Preview and playback
 
-Playback speed (default 5 fps) is separate from camera `fps`. Playback waits for
-each frame to finish processing if the requested speed cannot be reached.
+Parameter changes process the selected frame and any required calibration or
+threshold updates. Previewing does not rerun the full sequence or write outputs.
+Use the frame slider and playback controls to inspect other frames, and the
+mouse wheel over either preview to zoom around the cursor.
 
-### Processing rules
+Playback speed defaults to 5 fps and is independent of camera `fps`, which sets
+the measurement time scale. Playback waits for each frame to finish processing
+if the requested speed cannot be reached.
 
-Liquid is detected by changes from the clean background, whether darker or
-brighter. The main threshold identifies clear liquid; the faint threshold extends
-the outline only near already detected liquid. Enclosed bright regions are filled
-as part of the drop.
+### Frame selection and manual surface calibration
 
-One substrate line is used for the whole sequence. `--reflection-mode mirror`
-uses the drop and its reflection; `none` uses the drop's lower edge. `auto` selects
-`mirror` only with strong reflection evidence, or assumes it when no calibration
-frame is supplied. Use `none` for weak reflections. Surface angles are clockwise;
-without calibration or an explicit angle, the fallback is `-0.6` deg.
-`--surface-y-px` overrides the line's center position.
+The substrate parameter group contains two independent frame controls:
 
-### CLI parameter summary
+| GUI control | Selects |
+| --- | --- |
+| **Droplet size reference frame** | The frame used for both reference equivalent diameters. Auto discovers a suitable frame. |
+| **Surface calibration frame** | The impacted-droplet frame used to establish the fixed substrate line. Auto uses the clean background. |
 
-Put experiment settings in `<input-folder>/cv_config.txt`; blank lines and `#`
-comments are allowed. CLI precedence is **explicit options > cv_config.txt >
-program defaults**. Example:
+**Select surface line manually** lets you select two points in the
+**Before Processing** preview and confirm the line. This updates the surface
+calibration frame, surface center y, and surface tilt. Auto checkboxes retain
+their state, so values with Auto enabled can subsequently be recalculated.
+
+### Save and reset settings
+
+**Save cv_config.txt** writes the current analysis settings and output paths to
+`<input-folder>/cv_config.txt`. The dialog offers three choices:
+
+- **Yes:** rename the existing file to `cv_config.txt.bak`, replacing any previous backup, then save.
+- **No:** overwrite without creating a backup.
+- **Cancel:** leave the configuration file unchanged.
+
+Auto settings remain automatic when reloaded. **Reset Parameters** restores the
+values loaded when the folder was opened, including their Auto state.
+
+## Configuration
+
+Put experiment settings in `<input-folder>/cv_config.txt`. The file uses CLI
+option syntax; blank lines and `#` comments are allowed:
 
 ```text
+# Camera and scale
 --fps 4000
 --pixel-size-mm-per-px 0.01682736321
---calibration-frame 9105
+
+# Surface calibration
+--surface-calibration-frame 9105
 --reflection-mode mirror
 ```
 
-#### Key parameters
+Settings take precedence in this order, from highest to lowest:
 
-| Parameter | Default | Purpose |
-| --- | --- | --- |
-| `input_dir` | `sourcedata/example` | Folder containing numbered TIFF/JPEG frames and optional `cv_config.txt`. |
-| `--start-frame`, `--end-frame` | unbounded | Inclusive filename frame-number range; the first selected frame becomes the background. |
-| `--fps` | `8000` | Camera frame rate used to calculate `time_ms`. |
-| `--pixel-size-mm-per-px` | `0.00711883341` | Physical length represented by one pixel. |
-| `--calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
-| `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
-| `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
-| `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
-| `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
-| `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
-| `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
-| `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
-| `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
-| `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |
-| `--min-droplet-area-px2` | `250` | Ignore detected objects smaller than this area. |
-| `--morphology-radius-px` | `3` | Cleanup size for closing gaps and removing small specks. |
-| `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
-| `--hydrophobic {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
+| Mode | Precedence |
+| --- | --- |
+| CLI | Explicit command-line options > `cv_config.txt` > program defaults |
+| GUI | Current GUI settings > `cv_config.txt` > program defaults |
 
-For missing liquid edges, lower the main/faint thresholds or increase faint
+The GUI accepts no command-line folder or analysis options; choose the folder
+inside the application. For parameters with an Auto mode, omitting the option
+from the configuration preserves its automatic behavior.
+
+## Analysis and measurement
+
+### Liquid detection
+
+Liquid is detected by changes from the clean background, whether darker or
+brighter. The main threshold identifies clear liquid; the faint threshold
+extends the outline near already detected liquid. Enclosed bright regions are
+filled as part of the drop.
+
+For missing liquid edges, lower the main or faint thresholds, or increase faint
 reach. For separate specks, increase minimum drop area or outline cleanup size.
 
-#### Other parameters
+### Substrate calibration
 
-| Parameter | Default | Purpose |
+One substrate line is used for the whole sequence. The surface calibration
+frame and `--reflection-mode` determine how that line is found:
+
+| Reflection mode | Surface calibration |
+| --- | --- |
+| `mirror` | Uses the drop and its reflection. |
+| `none` | Uses the drop's lower edge; suitable for weak reflections. |
+| `auto` | Selects `mirror` only with strong reflection evidence; assumes `mirror` when no surface calibration frame is supplied. |
+
+`--surface-y-px` overrides the line's center position. Surface angles are
+clockwise; without calibration or an explicit angle, the fallback is `-0.6` deg.
+
+### Spreading diameter, impact, and time
+
+`d_spread` is the outermost liquid span within the substrate band
+(`--surface-band-px`, default 3 px); it is zero when the drop is clear of that
+band. With `--hydrophobic 1`, it is the full rim-to-rim width instead.
+
+Impact is always detected from contact-line width reaching
+`--min-impact-width-px`. By default, time is zero at impact and pre-impact rows
+are omitted. `--include-pre-impact` retains those rows, and
+`--time-zero first-frame` changes the time origin.
+
+### Reference equivalent diameters
+
+`D_parallel` and `D_normal` are the full silhouette spans parallel and normal
+to the substrate. Both reference equivalent diameters use the same frame:
+
+- **Auto:** the first frame whose lower-contour distance to the substrate is at most `D_eq_volume / 2`.
+- **Explicit:** the frame selected by `--droplet-size-ref-frame` or the GUI control. It must exist in the working range and contain a measurable droplet; it bypasses the automatic clearance condition.
+
+Selecting the size reference frame does not change the surface calibration.
+The two equivalent diameters are calculated as follows:
+
+| Quantity | Formula | Interpretation |
 | --- | --- | --- |
-| `-o`, `--output-csv` | `<project-dir>/outputs/<input-folder-name>/spreading_diameter.csv` | CSV output path. |
-| `--foreground-depth-px` | `220` | Search depth below the substrate line. |
-| `--min-contact-px` | `30` | Minimum detected pixels above the substrate for a selected drop. |
-| `--min-impact-width-px` | `30` | Contact-line diameter that marks the first impact frame. |
-| `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
-| `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
-| `--debug-dir` | `<project-dir>/outputs/<input-folder-name>/debug_overlays` | Diagnostic overlay directory. |
-| `--debug-interval` | `1` | Write one debug overlay every N frames. |
+| `ref_d_eq_volume` | `(D_parallel² × D_normal)^(1/3)` | Equivalent sphere diameter of an axisymmetric ellipsoid with the measured spans. |
+| `ref_d_eq_area` | `sqrt(4 × A / pi)` | Equivalent circle diameter of the measured side-view silhouette area `A`. |
+
+Both methods use the filled silhouette before surface clipping. The area method
+measures a 2D projection, not volume. Reference dimensions and clearance are
+frozen at `droplet_size_ref_frame` and repeated on every CSV row. If Auto
+finds no reference, those columns are empty.
 
 ## Outputs
+
+### Output locations
 
 The default CSV filename is `spreading_diameter.csv`.
 
 | Mode / GUI output choice | Output folder |
 | --- | --- |
-| Automatic / Project outputs | `<project-dir>/outputs/<input-folder-name>/` |
+| CLI default / GUI: Project outputs | `<project-dir>/outputs/<input-folder-name>/` |
 | GUI: Input folder (default) | `<input-folder>/CV_postprocessing/` |
 | GUI: Custom folder | Selected directory |
 
 `<project-dir>` is the directory containing `pyproject.toml`; the automatic
 default does not depend on the input location or current working directory.
-CLI paths can be overridden with `--output-csv` and `--debug-dir`.
+CLI output paths can be overridden with `--output-csv` and `--debug-dir`.
 
 GUI output selection overrides configured output paths, preserves the configured
-CSV filename, and always puts overlays in `<output-folder>/debug_overlays/`.
-For example, the input-folder choice for `sourcedata/example` writes to
+CSV filename, and puts overlays in `<output-folder>/debug_overlays/`. For example,
+the input-folder choice for `sourcedata/example` writes to
 `sourcedata/example/CV_postprocessing/`.
 
-`d_spread` is the outermost liquid span within the substrate band
-(`--surface-band-px`, default 3 px); it is zero when the drop is clear of that
-band. With `--hydrophobic 1`, it is the full rim-to-rim width instead. Impact is
-always detected from contact-line width reaching `--min-impact-width-px`.
+### Diagnostic overlays
 
-By default, time is zero at impact and pre-impact rows are omitted.
-`--include-pre-impact` retains them; `--time-zero first-frame` changes the origin.
+Overlays are written every frame by default; `--debug-interval` controls the
+regular interval. The first frame, size reference frame, and frames near impact
+can also produce overlays. Each full run first removes existing frame-numbered
+overlay PNGs from the target debug directory.
 
-### Reference equivalent diameters
+### CSV columns and naming
 
-`D_parallel` and `D_normal` are the full silhouette spans parallel and normal
-to the substrate. `ref_frame` is the first frame where the lower-contour distance
-to the substrate is at most `D_eq_volume / 2`.
-
-Both equivalent diameters are measured in that same reference frame:
-
-- `ref_d_eq_volume`: `(D_parallel² × D_normal)^(1/3)`, the equivalent sphere diameter of an axisymmetric ellipsoid with the measured spans.
-- `ref_d_eq_area`: `sqrt(4 × A / pi)`, the equivalent circle diameter of the measured side-view silhouette area `A`.
-
-Both methods use the filled silhouette before surface clipping. The area method
-measures a 2D projection, not volume. Reference dimensions and clearance are
-frozen at `ref_frame` and repeated on every CSV row; if no reference is found,
-those columns are empty.
-
-Overlays are written every frame by default (`--debug-interval` controls this).
-Each full run first removes existing frame-numbered overlay PNGs from the target
-debug directory.
-
-Parameter names use lowercase snake_case in Python and CSV, and corresponding
-hyphenated names in the CLI. `d` means diameter and `eq` means equivalent;
-`ref_` marks quantities frozen at the reference frame. Unit suffixes are
-`_px`, `_mm`, `_ms`, `_deg`, and `_px2` for area. Pixel size uses `_mm_per_px`;
-`fps` is the camera frame rate.
-
-### CSV columns
+Python and CSV names use lowercase snake_case; CLI names use corresponding
+hyphens. `d` means diameter, `eq` means equivalent, and `ref_` marks quantities
+frozen at the size reference frame. Unit suffixes are `_px`, `_mm`, `_ms`, `_deg`,
+and `_px2` for area. Pixel size uses `_mm_per_px`; `fps` is the camera frame rate.
 
 | Columns | Meaning |
 | --- | --- |
@@ -185,7 +208,7 @@ hyphenated names in the CLI. `d` means diameter and `eq` means equivalent;
 | `d_spread_px`, `d_spread_mm` | Spreading diameter selected by `--hydrophobic`. |
 | `d_contact_px`, `d_contact_mm` | Surface contact-line diameter. |
 | `d_rim_px`, `d_rim_mm` | Rim-to-rim diameter, available in hydrophobic mode. |
-| `ref_frame` | Frame used for both reference equivalent diameters. |
+| `droplet_size_ref_frame` | Frame used for both reference equivalent diameters. |
 | `ref_d_eq_volume_px`, `ref_d_eq_volume_mm` | Volume-equivalent reference diameter. |
 | `ref_d_eq_area_px`, `ref_d_eq_area_mm` | Area-equivalent reference diameter. |
 | `ref_d_parallel_px`, `ref_d_parallel_mm` | Reference projection span parallel to the substrate. |
@@ -193,9 +216,80 @@ hyphenated names in the CLI. `d` means diameter and `eq` means equivalent;
 | `ref_clearance_px`, `ref_clearance_mm` | Reference lower-contour clearance normal to the substrate. |
 | `impact_frame`, `surface_y_px` | Detected impact frame and fixed surface-line center y coordinate. |
 | `droplet_area_px2` | Current frame's filled gas-side area after surface clipping. |
-| `fps`, `pixel_size_mm_per_px`, `calibration_frame` | Camera and surface calibration metadata. |
+| `fps`, `pixel_size_mm_per_px`, `surface_calibration_frame` | Camera and surface calibration metadata. |
+
+## Parameter reference
+
+Analysis groups match the GUI. Input, impact/time, and output options have
+additional functional groups. Parameters within each group are sorted
+alphabetically by name, ignoring leading dashes.
+
+### Experiment and scale
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--fps` | `8000` | Camera frame rate used to calculate `time_ms`. |
+| `--pixel-size-mm-per-px` | `0.00711883341` | Physical length represented by one pixel. |
+
+### Substrate and width measurement
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--droplet-size-ref-frame` | automatic | Frame used for both reference equivalent diameters; Auto uses the first frame whose substrate clearance is at most half its volume-equivalent diameter. |
+| `--hydrophobic {0,1}` | `0` | Set to `1` for hydrophobic surfaces to measure the silhouette's rim-to-rim width instead of its contact-line width. |
+| `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
+| `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
+| `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
+| `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
+| `--surface-calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
+| `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
+
+### Liquid detection
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--foreground-depth-px` | `220` | Search depth below the substrate line. |
+| `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
+| `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
+| `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |
+| `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
+| `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
+
+### Drop selection and outline cleanup
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--min-contact-px` | `30` | Minimum detected pixels above the substrate for a selected drop. |
+| `--min-droplet-area-px2` | `250` | Ignore detected objects smaller than this area. |
+| `--morphology-radius-px` | `3` | Cleanup size for closing gaps and removing small specks. |
+
+### Input and working range
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--end-frame` | unbounded | Inclusive last filename frame number in the working range. |
+| `input_dir` | `sourcedata/example` | Folder containing numbered TIFF/JPEG frames and optional `cv_config.txt`. |
+| `--start-frame` | unbounded | Inclusive first filename frame number; this frame becomes the clean background. |
+
+### Impact and time
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--include-pre-impact`, `--no-include-pre-impact` | disabled | Include or exclude rows before impact. |
+| `--min-impact-width-px` | `30` | Contact-line diameter that marks the first impact frame. |
+| `--time-zero {impact,first-frame}` | `impact` | Choose the time origin. |
+
+### Output folder and diagnostics
+
+| Parameter | Default | Purpose |
+| --- | --- | --- |
+| `--debug-dir` | `<project-dir>/outputs/<input-folder-name>/debug_overlays` | Diagnostic overlay directory. |
+| `--debug-interval` | `1` | Write one debug overlay every N frames. |
+| `--output-csv`, `-o` | `<project-dir>/outputs/<input-folder-name>/spreading_diameter.csv` | CSV output path. |
 
 ## Development
+
+Run the test suite with:
 
 ```bash
 uv run python -m unittest discover -v

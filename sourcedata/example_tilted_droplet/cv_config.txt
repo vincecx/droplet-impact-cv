@@ -1,6 +1,0 @@
---fps 5000
---pixel-size-mm-per-px 0.01197682341
---calibration-frame 76
---surface-y-px 768
---reflection-mode none
---hydrophobic 0

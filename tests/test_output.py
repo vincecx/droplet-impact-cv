@@ -73,12 +73,12 @@ class OutputTests(unittest.TestCase):
             impact_frame=61,
             fps=8000.0,
             pixel_size_mm_per_px=0.00711883341,
-            calibration_frame=61,
+            surface_calibration_frame=61,
             d_contact_px=140.0,
             d_contact_mm=0.9966366774,
             d_rim_px=156.004,
             d_rim_mm=1.110565076,
-            ref_frame=42,
+            droplet_size_ref_frame=42,
             ref_d_eq_volume_px=150.0,
             ref_d_eq_volume_mm=1.0678250115,
             ref_d_eq_area_px=148.0,
@@ -108,7 +108,7 @@ class OutputTests(unittest.TestCase):
                 "d_contact_mm",
                 "d_rim_px",
                 "d_rim_mm",
-                "ref_frame",
+                "droplet_size_ref_frame",
                 "ref_d_eq_volume_px",
                 "ref_d_eq_volume_mm",
                 "ref_d_eq_area_px",
@@ -124,7 +124,7 @@ class OutputTests(unittest.TestCase):
                 "droplet_area_px2",
                 "fps",
                 "pixel_size_mm_per_px",
-                "calibration_frame",
+                "surface_calibration_frame",
             ],
         )
         self.assertEqual(
@@ -164,7 +164,7 @@ class OutputTests(unittest.TestCase):
             frame_number=1, filename="frame000001.tif", time_ms=0.0,
             d_spread_px=0.0, d_spread_mm=0.0, droplet_area_px2=0,
             surface_y_px=80, impact_frame=None, fps=8000.0,
-            pixel_size_mm_per_px=0.01, calibration_frame=None,
+            pixel_size_mm_per_px=0.01, surface_calibration_frame=None,
         )
         with TemporaryDirectory() as temporary_dir:
             output_path = Path(temporary_dir) / "result.csv"
@@ -173,7 +173,7 @@ class OutputTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
         for row in rows:
             for column in (
-                "ref_frame", "ref_d_eq_volume_px", "ref_d_eq_volume_mm",
+                "droplet_size_ref_frame", "ref_d_eq_volume_px", "ref_d_eq_volume_mm",
                 "ref_d_eq_area_px", "ref_d_eq_area_mm",
             ):
                 self.assertEqual(row[column], "")

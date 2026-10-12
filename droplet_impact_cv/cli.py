@@ -129,14 +129,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override detected surface y coordinate in px.",
     )
     parser.add_argument(
-        "--calibration-frame",
-        dest="calibration_frame",
+        "--surface-calibration-frame",
+        dest="surface_calibration_frame",
         type=nonnegative_int,
         metavar="FRAME",
         default=None,
         help=(
             "Frame number containing an impacted droplet, used to calibrate "
             "the surface line according to --reflection-mode."
+        ),
+    )
+    parser.add_argument(
+        "--droplet-size-ref-frame",
+        type=nonnegative_int,
+        metavar="FRAME",
+        default=None,
+        help=(
+            "Frame number used for both droplet size reference diameters. "
+            "Default: first frame with substrate clearance <= half the volume-equivalent diameter."
         ),
     )
     parser.add_argument(
@@ -154,7 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override surface angle in clockwise deg. By default the angle is "
-            "detected from --calibration-frame, or -0.6 when no calibration frame is given."
+            "detected from --surface-calibration-frame, or -0.6 when no calibration frame is given."
         ),
     )
     parser.add_argument(
@@ -344,7 +354,8 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         fps=args.fps,
         pixel_size_mm_per_px=args.pixel_size_mm_per_px,
         surface_y_px=args.surface_y_px,
-        calibration_frame=args.calibration_frame,
+        surface_calibration_frame=args.surface_calibration_frame,
+        droplet_size_ref_frame=args.droplet_size_ref_frame,
         surface_angle_deg=args.surface_angle_deg,
         reflection_mode=args.reflection_mode,
         mirror_min_depth_px=args.mirror_min_depth_px,
@@ -388,7 +399,7 @@ def main(argv: list[str] | None = None) -> None:
         )
     else:
         print("No valid droplet diameter measurements were found.")
-    if measurements and measurements[0].ref_frame is not None:
+    if measurements and measurements[0].droplet_size_ref_frame is not None:
         ref = measurements[0]
         for method, diameter_mm in (
             ("volume", ref.ref_d_eq_volume_mm),
@@ -397,5 +408,5 @@ def main(argv: list[str] | None = None) -> None:
             if diameter_mm is not None:
                 print(
                     f"Ref d_eq_{method}: {diameter_mm:.6f} mm "
-                    f"at frame {ref.ref_frame}"
+                    f"at frame {ref.droplet_size_ref_frame}"
                 )

@@ -914,7 +914,7 @@ def calibration_frame_mask(
     )
     if matching_file is None:
         raise ValueError(
-            f"--calibration-frame {frame_number} does not exist in the input sequence"
+            f"--surface-calibration-frame {frame_number} does not exist in the input sequence"
         )
     return full_foreground_mask(
         read_image(matching_file),

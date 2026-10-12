@@ -26,7 +26,8 @@ class AnalysisConfig:
     fps: float = DEFAULT_FPS
     pixel_size_mm_per_px: float = DEFAULT_PIXEL_SIZE_MM_PER_PX
     surface_y_px: int | None = None
-    calibration_frame: int | None = None
+    surface_calibration_frame: int | None = None
+    droplet_size_ref_frame: int | None = None
     surface_angle_deg: float | None = None
     reflection_mode: str = "auto"
     mirror_min_depth_px: int = DEFAULT_MIRROR_MIN_DEPTH_PX
@@ -64,12 +65,12 @@ class FrameMeasurement:
     impact_frame: int | None
     fps: float
     pixel_size_mm_per_px: float
-    calibration_frame: int | None
+    surface_calibration_frame: int | None
     d_contact_px: float | None = None
     d_contact_mm: float | None = None
     d_rim_px: float | None = None
     d_rim_mm: float | None = None
-    ref_frame: int | None = None
+    droplet_size_ref_frame: int | None = None
     ref_d_eq_volume_px: float | None = None
     ref_d_eq_volume_mm: float | None = None
     ref_d_eq_area_px: float | None = None

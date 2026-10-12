@@ -16,6 +16,37 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_reference_and_surface_frames_are_independent(self):
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text(
+                "--droplet-size-ref-frame 4\n--surface-calibration-frame 61\n", encoding="utf-8",
+            )
+            config = config_from_args(parse_args([str(folder)]))
+            self.assertEqual(config.droplet_size_ref_frame, 4)
+            self.assertEqual(config.surface_calibration_frame, 61)
+            config = config_from_args(parse_args([
+                str(folder), "--droplet-size-ref-frame", "5",
+                "--surface-calibration-frame", "62",
+            ]))
+            self.assertEqual(config.droplet_size_ref_frame, 5)
+            self.assertEqual(config.surface_calibration_frame, 62)
+            automatic = config_from_args(build_parser().parse_args([]))
+            self.assertIsNone(automatic.droplet_size_ref_frame)
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                build_parser().parse_args(["--droplet-size-ref-frame", "-1"])
+
+    def test_legacy_calibration_frame_is_rejected(self):
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
+            build_parser().parse_args(["--calibration-frame", "61"])
+        self.assertEqual(error.exception.code, 2)
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text("--calibration-frame 61\n", encoding="utf-8")
+            with redirect_stderr(StringIO()), self.assertRaises(SystemExit) as error:
+                parse_args([str(folder)])
+            self.assertEqual(error.exception.code, 2)
+
     def test_mirror_depth_folder_config_cli_override_and_defaults(self):
         with TemporaryDirectory() as temporary_dir:
             folder = Path(temporary_dir)
@@ -33,8 +64,8 @@ class CliConfigTests(unittest.TestCase):
             frame_number=5, filename="frame000005.tif", time_ms=0.0,
             d_spread_px=0.0, d_spread_mm=0.0, droplet_area_px2=1200,
             surface_y_px=80, impact_frame=None, fps=8000.0,
-            pixel_size_mm_per_px=0.01, calibration_frame=None,
-            ref_frame=4, ref_d_eq_volume_mm=0.36,
+            pixel_size_mm_per_px=0.01, surface_calibration_frame=None,
+            droplet_size_ref_frame=4, ref_d_eq_volume_mm=0.36,
             ref_d_eq_area_mm=0.39,
         )
         output = StringIO()
@@ -51,7 +82,7 @@ class CliConfigTests(unittest.TestCase):
                 "# Experiment settings\n"
                 "--fps 4000\n"
                 "--pixel-size-mm-per-px 0.01682736321\n"
-                "--calibration-frame 9105\n"
+                "--surface-calibration-frame 9105\n"
                 "--reflection-mode none\n",
                 encoding="utf-8",
             )
@@ -60,7 +91,7 @@ class CliConfigTests(unittest.TestCase):
 
         self.assertEqual(config.fps, 4000.0)
         self.assertEqual(config.pixel_size_mm_per_px, 0.01682736321)
-        self.assertEqual(config.calibration_frame, 9105)
+        self.assertEqual(config.surface_calibration_frame, 9105)
         self.assertEqual(config.reflection_mode, "none")
         self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
 
@@ -145,10 +176,10 @@ class CliConfigTests(unittest.TestCase):
 
     def test_surface_angle_is_automatic_unless_explicitly_overridden(self) -> None:
         parser = build_parser()
-        automatic = config_from_args(parser.parse_args(["--calibration-frame", "189"]))
+        automatic = config_from_args(parser.parse_args(["--surface-calibration-frame", "189"]))
         overridden = config_from_args(
             parser.parse_args(
-                ["--calibration-frame", "189", "--surface-angle-deg", "1.25"]
+                ["--surface-calibration-frame", "189", "--surface-angle-deg", "1.25"]
             )
         )
 

@@ -35,7 +35,7 @@ class SequenceAnalysisTests(unittest.TestCase):
 
         self.assertEqual([row.frame_number for row in measurements], [2, 3])
         for row in measurements:
-            self.assertIsNone(row.ref_frame)
+            self.assertIsNone(row.droplet_size_ref_frame)
             self.assertIsNone(row.ref_d_eq_volume_px)
             self.assertIsNone(row.ref_d_eq_area_px)
             self.assertIsNone(row.ref_d_eq_area_mm)
@@ -181,7 +181,7 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
             with patch("droplet_impact_cv.analysis.write_debug_overlay") as overlay:
                 measurements = analyze_sequence(config)
 
-        self.assertEqual([row.ref_frame for row in measurements], [4, 4, 4, 4, 4])
+        self.assertEqual([row.droplet_size_ref_frame for row in measurements], [4, 4, 4, 4, 4])
         self.assertTrue(
             all(row.ref_d_eq_volume_px is not None for row in measurements)
         )

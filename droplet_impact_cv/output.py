@@ -23,7 +23,7 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                 "d_contact_mm",
                 "d_rim_px",
                 "d_rim_mm",
-                "ref_frame",
+                "droplet_size_ref_frame",
                 "ref_d_eq_volume_px",
                 "ref_d_eq_volume_mm",
                 "ref_d_eq_area_px",
@@ -39,7 +39,7 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                 "droplet_area_px2",
                 "fps",
                 "pixel_size_mm_per_px",
-                "calibration_frame",
+                "surface_calibration_frame",
             ]
         )
         for row in measurements:
@@ -54,7 +54,7 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                     _format_optional(row.d_contact_mm, 9),
                     _format_optional(row.d_rim_px, 3),
                     _format_optional(row.d_rim_mm, 9),
-                    "" if row.ref_frame is None else row.ref_frame,
+                    "" if row.droplet_size_ref_frame is None else row.droplet_size_ref_frame,
                     _format_optional(row.ref_d_eq_volume_px, 3),
                     _format_optional(row.ref_d_eq_volume_mm, 9),
                     _format_optional(row.ref_d_eq_area_px, 3),
@@ -70,7 +70,7 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                     row.droplet_area_px2,
                     row.fps,
                     row.pixel_size_mm_per_px,
-                    "" if row.calibration_frame is None else row.calibration_frame,
+                    "" if row.surface_calibration_frame is None else row.surface_calibration_frame,
                 ]
             )
 

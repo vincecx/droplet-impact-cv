@@ -108,6 +108,11 @@ def prepare_sequence(
     background: np.ndarray | None = None,
 ) -> PreparedSequence:
     files = select_sequence_files(config) if files is None else files
+    reference_frame = config.droplet_size_ref_frame
+    if reference_frame is not None and reference_frame not in {
+        frame_number_from_filename(path) for path in files
+    }:
+        raise ValueError("Droplet size reference frame must be an existing image number in the working range.")
     background = build_background(files) if background is None else background
     coarse_surface_y = estimate_surface_y(
         background,
@@ -129,12 +134,12 @@ def prepare_sequence(
     preliminary_weak_threshold = resolve_weak_threshold(config, preliminary_threshold)
     calibrated_surface_line: SurfaceLine | None = None
     resolved_reflection_mode = config.reflection_mode
-    if config.calibration_frame is not None:
+    if config.surface_calibration_frame is not None:
         if resolved_reflection_mode == "auto":
             resolved_reflection_mode = detect_reflection_mode_from_frame(
                 files,
                 background,
-                config.calibration_frame,
+                config.surface_calibration_frame,
                 preliminary_threshold,
                 coarse_surface_y,
                 config,
@@ -145,7 +150,7 @@ def prepare_sequence(
             calibrated_surface_line = estimate_surface_line_from_symmetry_frame(
                 files,
                 background,
-                config.calibration_frame,
+                config.surface_calibration_frame,
                 preliminary_threshold,
                 coarse_surface_y,
                 config,
@@ -157,7 +162,7 @@ def prepare_sequence(
             calibrated_surface_line = estimate_surface_line_from_nonreflection_frame(
                 files,
                 background,
-                config.calibration_frame,
+                config.surface_calibration_frame,
                 preliminary_threshold,
                 config,
                 structure,
@@ -174,7 +179,7 @@ def prepare_sequence(
         calibration_target_center_x(
             files,
             background,
-            config.calibration_frame,
+            config.surface_calibration_frame,
             preliminary_threshold,
             coarse_surface_y,
             config,
@@ -182,7 +187,7 @@ def prepare_sequence(
             resolved_reflection_mode,
             weak_threshold=preliminary_weak_threshold,
         )
-        if config.calibration_frame is not None
+        if config.surface_calibration_frame is not None
         else None
     )
 
@@ -196,7 +201,7 @@ def prepare_sequence(
     if config.surface_y_px is not None:
         surface_line = SurfaceLine(float(int(config.surface_y_px)), surface_angle_deg)
     elif calibrated_surface_line is not None:
-        # The line calibrated from --calibration-frame is the single fixed
+        # The line calibrated from --surface-calibration-frame is the single fixed
         # reference used verbatim for every frame in the sequence.
         surface_line = calibrated_surface_line
     else:
@@ -235,7 +240,7 @@ def analyze_sequence(
 
     pending = []
     impact_frame: int | None = None
-    ref_frame: int | None = None
+    droplet_size_ref_frame: int | None = None
     ref_measurement = None
 
     for index, file_path in enumerate(files):
@@ -247,8 +252,15 @@ def analyze_sequence(
         if impact_frame is None and is_touching:
             impact_frame = frame_number
         is_ref_frame = False
-        if ref_measurement is None and is_reference_measurement(measurement):
-            ref_frame = frame_number
+        selected_reference = (
+            frame_number == config.droplet_size_ref_frame
+            if config.droplet_size_ref_frame is not None
+            else is_reference_measurement(measurement)
+        )
+        if ref_measurement is None and selected_reference:
+            if measurement.d_eq_volume_px is None or measurement.d_eq_area_px is None:
+                raise ValueError("Droplet size reference frame must contain a measurable droplet.")
+            droplet_size_ref_frame = frame_number
             ref_measurement = measurement
             is_ref_frame = True
         pending.append((frame_number, file_path, measurement))
@@ -308,7 +320,7 @@ def analyze_sequence(
                 impact_frame=impact_frame,
                 fps=config.fps,
                 pixel_size_mm_per_px=config.pixel_size_mm_per_px,
-                calibration_frame=config.calibration_frame,
+                surface_calibration_frame=config.surface_calibration_frame,
                 d_contact_px=measurement.d_contact_px,
                 d_contact_mm=(
                     measurement.d_contact_px * config.pixel_size_mm_per_px
@@ -321,7 +333,7 @@ def analyze_sequence(
                     if measurement.d_rim_px is not None
                     else None
                 ),
-                ref_frame=ref_frame,
+                droplet_size_ref_frame=droplet_size_ref_frame,
                 ref_d_eq_volume_px=(
                     ref_measurement.d_eq_volume_px
                     if ref_measurement is not None

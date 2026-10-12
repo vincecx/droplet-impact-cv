@@ -112,7 +112,7 @@ class PreviewSession:
     base_config: AnalysisConfig
     prepared: PreparedSequence
     initial_index: int
-    ref_frame: int | None
+    droplet_size_ref_frame: int | None
     applied_config: AnalysisConfig | None = None
 
     @classmethod
@@ -122,12 +122,21 @@ class PreviewSession:
     ) -> PreviewSession:
         config = load_folder_config(folder)
         prepared = prepare_sequence(config)
+        if config.droplet_size_ref_frame is not None:
+            index = next(index for index, path in enumerate(prepared.files)
+                         if frame_number_from_filename(path) == config.droplet_size_ref_frame)
+            if stopped():
+                raise RuntimeError("Operation cancelled.")
+            _, measurement = prepared.measure(prepared.files[index])
+            if measurement.d_eq_volume_px is None or measurement.d_eq_area_px is None:
+                raise ValueError("Droplet size reference frame must contain a measurable droplet.")
+            return cls(config, prepared, index, config.droplet_size_ref_frame)
         # Reference discovery happens once at open, stopping at the first match.
         # It never writes CSVs or removes/writes diagnostic files.
         for index, path in enumerate(prepared.files):
             if stopped():
                 raise RuntimeError("Operation cancelled.")
-            report(f"Finding ref frame: {index + 1} / {len(prepared.files)}")
+            report(f"Finding droplet size reference frame: {index + 1} / {len(prepared.files)}")
             _, measurement = prepared.measure(path)
             if is_reference_measurement(measurement):
                 return cls(config, prepared, index, frame_number_from_filename(path))
@@ -178,7 +187,9 @@ PARAMETERS = (
               "Camera recording rate, not preview speed."),
     Parameter("pixel_size_mm_per_px", "Image scale (mm/px)", 0.000001, 0.1, 0.000001,
               "Length represented by one image pixel, from your scale calibration."),
-    Parameter("calibration_frame", "Calibration frame", 0, 10000, 1,
+    Parameter("droplet_size_ref_frame", "Droplet size reference frame", 0, 10000, 1,
+              "Image number used for both reference equivalent diameters. Choose a frame with a clearly visible drop before impact. Auto selects the first frame whose substrate clearance is at most half its volume-equivalent diameter.", True),
+    Parameter("surface_calibration_frame", "Surface calibration frame", 0, 10000, 1,
               "Choose an image number after impact where the drop meets the substrate. This image sets the substrate line; changing it can move that line. Auto uses the clean background.", True),
     Parameter("strong_threshold", "Main drop threshold", 1, 4095, 1,
               "How different a pixel must be from the clean background to count as liquid. Lower values detect more of the drop, but may also include image noise.", True),
@@ -210,7 +221,7 @@ PARAMETERS = (
 
 PARAMETER_GROUPS = (
     ("Experiment and scale", ("fps", "pixel_size_mm_per_px")),
-    ("Substrate and width measurement", ("calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px", "mirror_min_depth_px")),
+    ("Substrate and width measurement", ("droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px", "mirror_min_depth_px")),
     ("Liquid detection", ("strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
     ("Drop selection and outline cleanup", ("min_droplet_area_px2", "min_contact_px", "morphology_radius_px")),
 )
@@ -386,7 +397,7 @@ class ParameterControl(ttk.Frame):
             raise ValueError("Ratio must be <= 1.")
         if self.spec.name in ("surface_y_px", "weak_reach_px", "min_droplet_area_px2",
                               "morphology_radius_px", "surface_band_px", "foreground_depth_px",
-                              "min_contact_px", "calibration_frame", "mirror_min_depth_px"):
+                              "min_contact_px", "surface_calibration_frame", "droplet_size_ref_frame", "mirror_min_depth_px"):
             if not number.is_integer():
                 raise ValueError("Enter a whole number.")
             return int(number)
@@ -801,7 +812,10 @@ class DropletApp:
             "weak_threshold": session.prepared.weak_threshold,
             "surface_y_px": session.prepared.surface_line.center_y_int(),
             "surface_angle_deg": session.prepared.surface_line.angle_deg,
-            "calibration_frame": frame_number_from_filename(session.prepared.files[-1]),
+            "surface_calibration_frame": frame_number_from_filename(session.prepared.files[-1]),
+            "droplet_size_ref_frame": (session.droplet_size_ref_frame
+                                             if session.droplet_size_ref_frame is not None
+                                             else frame_number_from_filename(session.prepared.files[0])),
         }
         for name, control in self.controls.items():
             value = getattr(session.base_config, name)
@@ -812,9 +826,11 @@ class DropletApp:
     def overrides(self) -> dict:
         result = {name: control.get_value() for name, control in self.controls.items()}
         result.update(reflection_mode=self.reflection.get(), hydrophobic=self.hydrophobic.get())
-        frame = result["calibration_frame"]
-        if frame is not None and frame not in {frame_number_from_filename(path) for path in self.session.prepared.files}:
-            raise ValueError("Calibration frame must be an existing image number in the working range.")
+        frames = {frame_number_from_filename(path) for path in self.session.prepared.files}
+        for name, label in (("surface_calibration_frame", "Surface calibration frame"),
+                            ("droplet_size_ref_frame", "Droplet size reference frame")):
+            if result[name] is not None and result[name] not in frames:
+                raise ValueError(f"{label} must be an existing image number in the working range.")
         return result
 
     def reset_choice(self, name: str):
@@ -969,7 +985,7 @@ class DropletApp:
             self.surface_hint.set(str(error) + " Reselect the points.")
             return
         frame = frame_number_from_filename(self.session.prepared.files[self.selection_frame_index])
-        for name, value in (("calibration_frame", frame), ("surface_y_px", center_y), ("surface_angle_deg", angle)):
+        for name, value in (("surface_calibration_frame", frame), ("surface_y_px", center_y), ("surface_angle_deg", angle)):
             control = self.controls[name]
             control.set_value(None if control.auto.get() else value, value, remember=False)
         self.end_surface_selection()
@@ -1082,7 +1098,7 @@ class DropletApp:
                     self.range_label.configure(text=(
                         f"Working range: {frame_number_from_filename(files[0])} - "
                         f"{frame_number_from_filename(files[-1])} | "
-                        f"Initial ref frame: {result.ref_frame if result.ref_frame is not None else 'not detected (first frame shown)'}"
+                        f"Initial droplet size reference frame: {result.droplet_size_ref_frame if result.droplet_size_ref_frame is not None else 'not detected (first frame shown)'}"
                     ))
                     self.choose.configure(state="normal")
                     self.reset.configure(state="normal")
@@ -1096,7 +1112,7 @@ class DropletApp:
                         "weak_threshold": prepared.weak_threshold,
                         "surface_y_px": prepared.surface_line.center_y_int(),
                         "surface_angle_deg": prepared.surface_line.angle_deg,
-                        "calibration_frame": frame_number_from_filename(prepared.files[-1]),
+                        "surface_calibration_frame": frame_number_from_filename(prepared.files[-1]),
                     }
                     for name, value in resolved.items():
                         if self.controls[name].auto.get():

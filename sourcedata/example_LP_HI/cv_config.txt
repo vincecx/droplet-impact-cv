@@ -1,4 +1,0 @@
---fps 4000
---pixel-size-mm-per-px 0.01682736321
---calibration-frame 9105
---reflection-mode mirror

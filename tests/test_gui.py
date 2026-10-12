@@ -100,7 +100,8 @@ class PreviewTests(unittest.TestCase):
         config = replace(
             load_folder_config(self.folder), fps=1234.5, hydrophobic=True,
             strong_threshold=None, weak_threshold=None, surface_y_px=None,
-            surface_angle_deg=-1.25, calibration_frame=None, start_frame=2, end_frame=5,
+            surface_angle_deg=-1.25, surface_calibration_frame=None,
+            droplet_size_ref_frame=3, start_frame=2, end_frame=5,
             output_csv=self.folder / "output's folder" / "result.csv",
             debug_dir=self.folder / "output's folder" / "debug overlays",
         )
@@ -141,11 +142,47 @@ class PreviewTests(unittest.TestCase):
     def test_initial_preview_is_reference_and_discovery_stops_there(self):
         with patch("droplet_impact_cv.analysis.read_image", wraps=read_image) as reads:
             session = PreviewSession.open(self.folder)
-        self.assertEqual(session.ref_frame, 4)
+        self.assertEqual(session.droplet_size_ref_frame, 4)
         self.assertEqual(session.initial_index, 3)
         self.assertEqual([call.args[0].name for call in reads.call_args_list], [
             "frame000001.tif", "frame000002.tif", "frame000003.tif", "frame000004.tif",
         ])
+
+    def test_explicit_reference_bypasses_auto_clearance_in_preview_and_batch(self):
+        with self.config_file.open("a", encoding="utf-8") as handle:
+            handle.write("--droplet-size-ref-frame 2\n")
+        session = PreviewSession.open(self.folder)
+        self.assertEqual(session.droplet_size_ref_frame, 2)
+        self.assertEqual(session.initial_index, 1)
+        rows = analyze_sequence(replace(session.base_config, debug_dir=None))
+        self.assertTrue(all(row.droplet_size_ref_frame == 2 for row in rows))
+        self.assertTrue(all(row.ref_clearance_px > row.ref_d_eq_volume_px / 2 for row in rows))
+
+    def test_reference_override_freezes_selected_size_and_keeps_surface(self):
+        config = replace(load_folder_config(self.folder), debug_dir=None)
+        baseline = analyze_sequence(config)
+        image = read_image(self.folder / "frame000005.tif")
+        image[40:70, 30:90] = 2000
+        tifffile.imwrite(self.folder / "frame000005.tif", image)
+        selected = analyze_sequence(replace(config, droplet_size_ref_frame=5))
+        self.assertTrue(all(row.droplet_size_ref_frame == 5 for row in selected))
+        self.assertTrue(all(row.ref_d_eq_area_px > baseline[0].ref_d_eq_area_px for row in selected))
+        self.assertTrue(all(row.surface_y_px == baseline[0].surface_y_px for row in selected))
+
+    def test_explicit_reference_rejects_missing_out_of_range_or_empty_frames(self):
+        config = replace(load_folder_config(self.folder), debug_dir=None)
+        for overrides, message in (
+            ({"droplet_size_ref_frame": 999}, "existing image number"),
+            ({"droplet_size_ref_frame": 2, "start_frame": 3}, "existing image number"),
+            ({"droplet_size_ref_frame": 1}, "measurable droplet"),
+        ):
+            with self.subTest(overrides=overrides):
+                with self.assertRaisesRegex(ValueError, message):
+                    analyze_sequence(replace(config, **overrides))
+        with self.config_file.open("a", encoding="utf-8") as handle:
+            handle.write("--droplet-size-ref-frame 1\n")
+        with self.assertRaisesRegex(ValueError, "measurable droplet"):
+            PreviewSession.open(self.folder)
 
     def test_frame_range_and_no_reference_fallback(self):
         with self.config_file.open("a", encoding="utf-8") as handle:
@@ -154,7 +191,7 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual([path.name for path in session.prepared.files], [
             "frame000002.tif", "frame000003.tif",
         ])
-        self.assertIsNone(session.ref_frame)
+        self.assertIsNone(session.droplet_size_ref_frame)
         self.assertEqual(session.initial_index, 0)
 
     def test_frame_scrubbing_processes_only_selected_frame(self):
@@ -198,14 +235,14 @@ class PreviewTests(unittest.TestCase):
 
     def test_experiment_overrides_change_units_time_and_calibration_in_batch(self):
         session = PreviewSession.open(self.folder)
-        overrides = {"fps": 2000.0, "pixel_size_mm_per_px": 0.02, "calibration_frame": 5}
+        overrides = {"fps": 2000.0, "pixel_size_mm_per_px": 0.02, "surface_calibration_frame": 5}
         session.preview(3, overrides)
-        self.assertEqual(session.prepared.config.calibration_frame, 5)
+        self.assertEqual(session.prepared.config.surface_calibration_frame, 5)
         config = replace(session.base_config, debug_dir=None, **overrides)
         rows = analyze_sequence(config)
         self.assertEqual(rows[1].time_ms - rows[0].time_ms, 0.5)
         self.assertEqual(rows[0].pixel_size_mm_per_px, 0.02)
-        self.assertEqual(rows[0].calibration_frame, 5)
+        self.assertEqual(rows[0].surface_calibration_frame, 5)
         self.assertAlmostEqual(rows[3].ref_d_eq_area_mm, rows[3].ref_d_eq_area_px * 0.02)
 
 
@@ -308,7 +345,7 @@ class GuiControlTests(unittest.TestCase):
         self.assertTrue(changed)
 
     def test_experiment_parameters_validate_positive_values_and_frame_integers(self):
-        for name in ("fps", "pixel_size_mm_per_px", "calibration_frame"):
+        for name in ("fps", "pixel_size_mm_per_px", "surface_calibration_frame"):
             spec = next(spec for spec in PARAMETERS if spec.name == name)
             control = ParameterControl(self.root, spec, lambda: None)
             control.set_value(1, 1)
@@ -356,19 +393,19 @@ class GuiWorkflowTests(unittest.TestCase):
         self.assertEqual(app.surface_points, [])
         pump()
         app.controls["surface_angle_deg"].set_value(None, 0, remember=False)
-        app.controls["calibration_frame"].set_value(4, 4, remember=False)
+        app.controls["surface_calibration_frame"].set_value(4, 4, remember=False)
         app.viewports[0].zoom_at(0.5, 0.5, 2, app.images[0].shape, 1, 1)
         click(20, 70)
         click(100, 78)
         self.assertEqual(len(app.preview_labels[0].find_all()), 4)  # Image, line, two points.
         self.assertEqual(str(app.process["state"]), "disabled")
         app.confirm_surface_selection()
-        self.assertEqual(app.controls["calibration_frame"].get_value(), 5)
+        self.assertEqual(app.controls["surface_calibration_frame"].get_value(), 5)
         self.assertEqual(app.controls["surface_y_px"].get_value(), 75)
         self.assertAlmostEqual(float(app.controls["surface_angle_deg"].value.get()), np.degrees(np.arctan(0.1)))
         self.assertTrue(app.controls["surface_angle_deg"].auto.get())
         self.assertFalse(app.controls["surface_y_px"].auto.get())
-        self.assertFalse(app.controls["calibration_frame"].auto.get())
+        self.assertFalse(app.controls["surface_calibration_frame"].auto.get())
         self.assertFalse(app.selecting_surface)
         pump()
         self.assertEqual(float(app.controls["surface_angle_deg"].value.get()), app.session.prepared.surface_line.angle_deg)
@@ -403,7 +440,20 @@ class GuiWorkflowTests(unittest.TestCase):
                 patch("droplet_impact_cv.gui.messagebox.showerror", side_effect=AssertionError):
             app.choose_folder()
             pump(lambda: app.status.get().startswith("Ready."))
-            self.assertEqual(app.session.ref_frame, 4)
+            self.assertEqual(app.session.droplet_size_ref_frame, 4)
+            reference_control = app.controls["droplet_size_ref_frame"]
+            self.assertTrue(reference_control.auto.get())
+            self.assertEqual(reference_control.value.get(), "4")
+            reference_control.set_value(2, 2, remember=False)
+            app.schedule_preview()
+            pump(lambda: app.preview_ready)
+            self.assertEqual(app.batch_config().droplet_size_ref_frame, 2)
+            reference_control.value.set("999")
+            self.assertEqual(str(app.process["state"]), "disabled")
+            self.assertIn("Droplet size reference frame", app.status.get())
+            reference_control.reset_button.invoke()
+            pump(lambda: app.preview_ready)
+            self.assertIsNone(app.batch_config().droplet_size_ref_frame)
             self.assertEqual(len(app.photos), 2)
             self.assertEqual(app.output_mode.get(), "input")
             self.assertEqual(app.batch_config().debug_dir, self.folder / "CV_postprocessing" / "debug_overlays")
@@ -514,12 +564,12 @@ class GuiWorkflowTests(unittest.TestCase):
             popup.assert_not_called()
             app.speed_reset.invoke()
             self.assertEqual(app.playback_fps.get(), "5")
-            app.controls["calibration_frame"].auto.set(False)
-            app.controls["calibration_frame"].value.set("999")
+            app.controls["surface_calibration_frame"].auto.set(False)
+            app.controls["surface_calibration_frame"].value.set("999")
             self.assertEqual(str(app.status_label["foreground"]), STATUS_COLORS["error"])
             self.assertEqual(str(app.process["state"]), "disabled")
             popup.assert_not_called()
-            app.controls["calibration_frame"].reset_button.invoke()
+            app.controls["surface_calibration_frame"].reset_button.invoke()
             pump(lambda: app.preview_ready)
             # Recoverable preview-setting errors are red and never show a dialog.
             def preview_error():
