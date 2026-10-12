@@ -12,8 +12,9 @@ Physics organization
 ---------------------
 Single run  -> ``spreading_dynamics_<tag>``  (asymmetric 4-panel grid)
     a  Spreading factor beta(t) = d/D0          — primary dynamics (hero)
-       includes contact-line / rim diameters when they differ, beta_max,
-       phase shading (spreading vs recoil), dimensionless top axis tau = tU/D0
+       with contact-line / rim diameters when they differ, beta_max,
+       phase shading (spreading vs recoil), optional dimensionless top
+       axis tau = tU/D0
     b  Incoming droplet geometry (D_parallel, D_normal, D_eq,V, D_eq,A)
        — setup / initial anisotropy that defines the length scale
     c  Contact-line velocity u_cl(t)            — kinematic mechanism
@@ -27,6 +28,12 @@ Multiple runs -> ``spreading_comparison``
 
 A machine-readable ``spreading_metrics_summary.csv`` is always written.
 
+Time window
+-----------
+All time-dependent panels show only the dynamics window 0 <= t <= 2*t_max
+(see ``dynamics_window``); later frames are not used in the figures. Scalar
+metrics and the summary table still refer to the complete CSV.
+
 Inputs
 ------
 Measurements are taken from the current ``spreading_diameter.csv``: time
@@ -36,6 +43,13 @@ the script never reads cv_config.txt from the input folder. A
 ``run_params.json`` in the same result folder supplies settings that are not
 stored in the CSV (e.g. the configured surface angle) and is used when
 present.
+
+Adding figures
+--------------
+Each panel is an independent ``build_panel_*`` function that draws onto a
+given Axes; the ``figure_*`` functions only arrange them. New panels or new
+data columns should be added to the RunData / RunMetrics dataclasses and
+wired into a panel builder — no figure-assembly changes are required.
 
 Examples
 --------
@@ -52,16 +66,69 @@ import csv
 import json
 import math
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Loading: current-format CSV is the data source; run_params.json is optional
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 1. Data model
+# ===========================================================================
 
-REQUIRED_COLUMNS = ("time_ms", "d_spread_mm")
+
+@dataclass
+class RunData:
+    """Raw time series and metadata parsed from one result folder."""
+
+    tag: str
+    csv_path: Path
+    frame: np.ndarray
+    t_ms: np.ndarray
+    d_spread: np.ndarray
+    d_contact: np.ndarray
+    d_rim: np.ndarray
+    d_eq_v: np.ndarray
+    d_eq_a: np.ndarray
+    d_parallel: np.ndarray
+    d_normal: np.ndarray
+    clearance: np.ndarray
+    area_px2: np.ndarray
+    fps: float | None
+    pixel_mm_per_px: float | None
+    impact_frame: float | None
+    surface_angle_deg: float | None
+
+    @property
+    def n_rows(self) -> int:
+        return int(len(self.t_ms))
+
+
+@dataclass
+class RunMetrics:
+    """Derived quantities for one run; arrays align with RunData rows."""
+
+    tag: str
+    d0_mm: float
+    d0_source: str
+    beta: np.ndarray
+    beta_max: float
+    t_max_ms: float
+    idx_max: int
+    beta_final: float
+    u_cl: np.ndarray
+    u_peak_m_s: float
+    t_u_peak_ms: float
+    aspect_ratio: float | None
+    we: float | None
+    re: float | None
+
+
+# ===========================================================================
+# 2. Loading (CSV is the data source; run_params.json is optional)
+# ===========================================================================
+
 RUN_PARAMS_FILENAME = "run_params.json"
+REQUIRED_COLUMNS = ("time_ms", "d_spread_mm")
 
 
 def _to_float(value: str | None) -> float | None:
@@ -76,7 +143,7 @@ def _to_float(value: str | None) -> float | None:
         return None
 
 
-def load_run(path: Path) -> dict:
+def load_run(path: Path) -> RunData:
     """Parse a current-format spreading CSV; run_params.json is optional."""
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
@@ -116,10 +183,9 @@ def load_run(path: Path) -> dict:
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"cannot read {params_path}: {error}") from None
 
-    run = {
-        "path": path,
+    data = {
         "tag": path.parent.name,
-        "n_rows": len(rows),
+        "csv_path": path,
         "frame": column("frame_number"),
         "t_ms": column("time_ms"),
         "d_spread": column("d_spread_mm"),
@@ -130,36 +196,55 @@ def load_run(path: Path) -> dict:
         "d_parallel": column("ref_d_parallel_mm"),
         "d_normal": column("ref_d_normal_mm"),
         "clearance": column("ref_clearance_mm"),
-        "d_eq_v_px": column("ref_d_eq_volume_px"),
-        "d_eq_a_px": column("ref_d_eq_area_px"),
         "area_px2": column("droplet_area_px2"),
         "fps": scalar("fps"),
         "pixel_mm_per_px": scalar("pixel_size_mm_per_px"),
         "impact_frame": scalar("impact_frame"),
-        "surface_angle_deg": _to_float(str(params.get("surface_angle_deg", ""))),
+        "surface_angle_deg": _to_float(
+            str(params.get("surface_angle_deg", ""))
+        ),
     }
 
     # keep only rows with a valid time axis, sort chronologically
-    valid = np.isfinite(run["t_ms"])
+    valid = np.isfinite(data["t_ms"])
+    n = len(rows)
     if valid.sum() >= 2:
-        order = np.argsort(run["t_ms"][valid], kind="stable")
-        for key, val in run.items():
-            if isinstance(val, np.ndarray) and val.shape == (len(rows),):
-                run[key] = val[valid][order]
-        run["n_rows"] = int(valid.sum())
-    return run
+        order = np.argsort(data["t_ms"][valid], kind="stable")
+        for key, val in list(data.items()):
+            if isinstance(val, np.ndarray) and val.shape == (n,):
+                data[key] = val[valid][order]
+
+    return RunData(
+        tag=data["tag"],
+        csv_path=data["csv_path"],
+        frame=data["frame"],
+        t_ms=data["t_ms"],
+        d_spread=data["d_spread"],
+        d_contact=data["d_contact"],
+        d_rim=data["d_rim"],
+        d_eq_v=data["d_eq_v"],
+        d_eq_a=data["d_eq_a"],
+        d_parallel=data["d_parallel"],
+        d_normal=data["d_normal"],
+        clearance=data["clearance"],
+        area_px2=data["area_px2"],
+        fps=data["fps"],
+        pixel_mm_per_px=data["pixel_mm_per_px"],
+        impact_frame=data["impact_frame"],
+        surface_angle_deg=data["surface_angle_deg"],
+    )
 
 
-# ---------------------------------------------------------------------------
-# Derived quantities
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 3. Physics / derived quantities
+# ===========================================================================
 
-def reference_diameter(run: dict, source: str) -> tuple[float, str]:
+
+def reference_diameter(run: RunData, source: str) -> tuple[float, str]:
     """Return (D0 in mm, provenance). source: auto | volume | area."""
-    v = run["d_eq_v"]
-    a = run["d_eq_a"]
-    v = v[np.isfinite(v)][0] if np.isfinite(v).any() else np.nan
-    a = a[np.isfinite(a)][0] if np.isfinite(a).any() else np.nan
+    v_arr, a_arr = run.d_eq_v, run.d_eq_a
+    v = v_arr[np.isfinite(v_arr)][0] if np.isfinite(v_arr).any() else np.nan
+    a = a_arr[np.isfinite(a_arr)][0] if np.isfinite(a_arr).any() else np.nan
 
     if source == "volume" and math.isfinite(v):
         return float(v), "volume-equivalent"
@@ -170,13 +255,12 @@ def reference_diameter(run: dict, source: str) -> tuple[float, str]:
             return float(v), "volume-equivalent"
         if math.isfinite(a):
             return float(a), "area-equivalent"
-    # last-resort: largest pre-spread-ish diameter cannot be identified;
-    # fall back to the first measured spread diameter only if nothing else.
-    d0 = run["d_spread"][0] if run["d_spread"].size else np.nan
+    # last resort: first measured spread diameter
+    d0 = run.d_spread[0] if run.d_spread.size else np.nan
     if math.isfinite(d0):
         return float(d0), "first-frame"
     raise ValueError(
-        f"No reference diameter could be determined from {run['path']}."
+        f"No reference diameter could be determined from {run.csv_path}."
     )
 
 
@@ -191,8 +275,8 @@ def smooth_derivative(t_s: np.ndarray, y: np.ndarray) -> np.ndarray:
     try:
         from scipy.signal import savgol_filter
 
-        n = mask.sum()
-        window = min(7, n if n % 2 == 1 else n - 1)
+        count = mask.sum()
+        window = min(7, count if count % 2 == 1 else count - 1)
         while window > 5 and window % 2 == 0:
             window -= 1
         polyorder = 2 if window >= 5 else 1
@@ -206,18 +290,36 @@ def smooth_derivative(t_s: np.ndarray, y: np.ndarray) -> np.ndarray:
         return np.gradient(y, t_s, edge_order=1)
 
 
-def aspect_ratio(run: dict) -> float | None:
-    p = run["d_parallel"]
-    n = run["d_normal"]
+def aspect_ratio(run: RunData) -> float | None:
+    p, n = run.d_parallel, run.d_normal
     if np.isfinite(p).any() and np.isfinite(n).any() and n[0] != 0:
         return float(p[0] / n[0])
     return None
 
 
-def compute_metrics(run: dict, d0_mm: float, d0_source: str,
-                    u0: float | None) -> dict:
-    t = run["t_ms"]
-    d = run["d_spread"]
+# Only the dynamics window [0, 2*t_max] is shown in the figures.
+WINDOW_FACTOR = 2.0
+
+
+def dynamics_window(run: RunData, m: RunMetrics,
+                    factor: float = WINDOW_FACTOR) -> np.ndarray:
+    """Boolean mask of frames belonging to the plotted dynamics window."""
+    t = run.t_ms
+    if not math.isfinite(m.t_max_ms) or m.t_max_ms <= 0:
+        return np.isfinite(t)
+    return (
+        np.isfinite(t)
+        & (t >= 0.0)
+        & (t <= factor * m.t_max_ms + 1e-9)
+    )
+
+
+def evaluate_run(run: RunData, *, d0_mm: float, d0_source: str,
+                 impact_velocity: float | None = None,
+                 rho: float | None = None, sigma: float | None = None,
+                 mu: float | None = None) -> RunMetrics:
+    """Compute the derived quantities of one run."""
+    t, d = run.t_ms, run.d_spread
     beta = d / d0_mm if math.isfinite(d0_mm) else d.copy()
 
     finite = np.isfinite(beta)
@@ -227,43 +329,44 @@ def compute_metrics(run: dict, d0_mm: float, d0_source: str,
     beta_final = float(beta[finite][-1]) if finite.any() else math.nan
 
     u_cl = smooth_derivative(t / 1000.0, d / 1000.0)  # m/s
-    pos = u_cl > 0
-    u_peak = float(np.nanmax(u_cl)) if pos.any() else math.nan
-    if pos.any():
-        t_u_peak = float(t[int(np.nanargmax(np.where(pos, u_cl, np.nan)))])
+    positive = u_cl > 0
+    u_peak = float(np.nanmax(u_cl)) if positive.any() else math.nan
+    if positive.any():
+        t_u_peak = float(
+            t[int(np.nanargmax(np.where(positive, u_cl, np.nan)))]
+        )
     else:
         t_u_peak = math.nan
 
-    ar = aspect_ratio(run)
-
     we = reynolds = None
-    if u0 is not None and math.isfinite(d0_mm):
-        if run.get("rho") and run.get("sigma"):
-            we = run["rho"] * u0**2 * (d0_mm / 1000.0) / run["sigma"]
-        if run.get("rho") and run.get("mu"):
-            reynolds = run["rho"] * u0 * (d0_mm / 1000.0) / run["mu"]
+    if impact_velocity is not None and math.isfinite(d0_mm):
+        d0_m = d0_mm / 1000.0
+        if rho and sigma:
+            we = rho * impact_velocity**2 * d0_m / sigma
+        if rho and mu:
+            reynolds = rho * impact_velocity * d0_m / mu
 
-    return {
-        "tag": run["tag"],
-        "d0_mm": d0_mm,
-        "d0_source": d0_source,
-        "beta": beta,
-        "beta_max": beta_max,
-        "t_max_ms": t_max,
-        "beta_final": beta_final,
-        "u_cl": u_cl,
-        "u_peak_m_s": u_peak,
-        "t_u_peak_ms": t_u_peak,
-        "aspect_ratio": ar,
-        "we": we,
-        "re": reynolds,
-        "idx_max": idx_max,
-    }
+    return RunMetrics(
+        tag=run.tag,
+        d0_mm=d0_mm,
+        d0_source=d0_source,
+        beta=beta,
+        beta_max=beta_max,
+        t_max_ms=t_max,
+        idx_max=idx_max,
+        beta_final=beta_final,
+        u_cl=u_cl,
+        u_peak_m_s=u_peak,
+        t_u_peak_ms=t_u_peak,
+        aspect_ratio=aspect_ratio(run),
+        we=we,
+        re=reynolds,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Style
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 4. Presentation constants and shared helpers
+# ===========================================================================
 
 PALETTE = {
     "hero": "#0F4D92",
@@ -281,6 +384,10 @@ RUN_COLORS = [
     "#0F4D92", "#42949E", "#9A4D8E", "#B64342",
     "#3775BA", "#767676", "#5B8FD6",
 ]
+
+# small white background for annotations drawn over curves/grid lines
+ANNOTATION_BOX = dict(boxstyle="round,pad=0.18", fc="white",
+                      ec="none", alpha=0.9)
 
 
 def apply_style() -> None:
@@ -339,31 +446,14 @@ def save_figure(fig, outdir: Path, stem: str, formats: list[str],
         fig.savefig(
             target,
             dpi=dpi if fmt in ("png", "tiff", "tif", "jpg") else None,
-            bbox_inches="tight", pad_inches=0.04,
+            bbox_inches="tight", pad_inches=0.05,
         )
         paths.append(target)
     return paths
 
 
-# ---------------------------------------------------------------------------
-# Single-run dynamics figure
-# ---------------------------------------------------------------------------
-
-def _condition_lines(run: dict, m: dict, u0: float | None,
-                     tilt: float | None) -> list[str]:
-    lines = [rf"$D_0$ = {m['d0_mm']:.2f} mm"]
-    if u0 is not None:
-        lines.append(rf"$U_0$ = {u0:.2f} m s$^{{-1}}$")
-    if m["we"] is not None:
-        lines.append(rf"$We$ = {m['we']:.0f}")
-    if m["re"] is not None:
-        lines.append(rf"$Re$ = {m['re']:.0f}")
-    if tilt is not None:
-        lines.append(rf"$\alpha$ = {tilt:g}$\degree$")
-    return lines
-
-
 def _series_differs(a: np.ndarray, b: np.ndarray) -> bool:
+    """True where b differs from a by more than 1% of a's scale."""
     if a.shape != b.shape:
         return False
     mask = np.isfinite(a) & np.isfinite(b)
@@ -373,198 +463,226 @@ def _series_differs(a: np.ndarray, b: np.ndarray) -> bool:
     return float(np.nanmax(np.abs(a[mask] - b[mask])) / scale) > 0.01
 
 
-def figure_single(run: dict, m: dict, args, outdir: Path) -> list[Path]:
-    import matplotlib.pyplot as plt
-    from matplotlib.gridspec import GridSpec
+def add_phase_labels(ax, m: RunMetrics, win_end: float) -> None:
+    """Spreading / Recoil labels fixed to the inner top of the axes."""
+    trans = ax.get_xaxis_transform()  # x = data, y = axes fraction
+    kw = dict(transform=trans, ha="center", va="top",
+              fontsize=6.6, color=PALETTE["neutral_mid"])
+    ax.text(m.t_max_ms / 2.0, 0.965, "Spreading", **kw)
+    if win_end > m.t_max_ms * 1.15:
+        ax.text((m.t_max_ms + win_end) / 2.0, 0.965,
+                "Recoil / relaxation", **kw)
 
-    t = run["t_ms"]
-    d0 = m["d0_mm"]
-    k = m["idx_max"]
-    u0 = args.impact_velocity
 
-    fig = plt.figure(figsize=(7.2, 4.25))
-    gs = GridSpec(
-        2, 6, figure=fig,
-        hspace=0.42, wspace=1.25,
-        left=0.065, right=0.985, top=0.93, bottom=0.11,
-    )
-    ax_a = fig.add_subplot(gs[0, 0:4])
-    ax_b = fig.add_subplot(gs[0, 4:6])
-    ax_c = fig.add_subplot(gs[1, 0:2])
-    ax_d = fig.add_subplot(gs[1, 2:6])
+def condition_summary(m: RunMetrics, u0: float | None,
+                      tilt: float | None) -> str:
+    """One-line condition metadata rendered above the figure, not inside axes."""
+    parts = [rf"$D_0$ = {m.d0_mm:.2f} mm"]
+    if u0 is not None:
+        parts.append(rf"$U_0$ = {u0:.2f} m s$^{{-1}}$")
+    if m.we is not None:
+        parts.append(rf"$We$ = {m.we:.0f}")
+    if m.re is not None:
+        parts.append(rf"$Re$ = {m.re:.0f}")
+    if tilt is not None:
+        parts.append(rf"$\alpha$ = {tilt:g}$\degree$")
+    return "     ".join(parts)
 
-    # --- panel a: spreading factor beta(t) --------------------------------
-    ax = ax_a
-    ax.plot(t, m["beta"], color=PALETTE["hero"], lw=1.8, marker="o",
+
+def effective_tilt(run: RunData, cli_tilt: float | None) -> float | None:
+    """CLI --tilt wins; otherwise the angle recorded in run_params.json."""
+    return cli_tilt if cli_tilt is not None else run.surface_angle_deg
+
+
+# ===========================================================================
+# 5. Single-run panel builders
+# ===========================================================================
+
+
+def build_panel_beta(ax, run: RunData, m: RunMetrics, *,
+                     impact_velocity: float | None = None,
+                     window: np.ndarray | None = None) -> None:
+    """Panel a: spreading factor beta(t), primary dynamics."""
+    w = np.ones(run.n_rows, dtype=bool) if window is None else window
+    t = run.t_ms[w]
+    win_end = float(t[-1])
+    spread = run.d_spread[w]
+
+    # phase shading and labels (labels sit clear of the curve via headroom)
+    ax.axvspan(0.0, m.t_max_ms, color=PALETTE["hero"], alpha=0.06, lw=0)
+    add_phase_labels(ax, m, win_end)
+
+    # alternative diameter definitions, only when meaningfully different
+    d_contact, d_rim = run.d_contact[w], run.d_rim[w]
+    if _series_differs(spread, d_contact):
+        ax.plot(t, d_contact / m.d0_mm, color=PALETTE["contact"],
+                lw=1.3, ls=(0, (4, 2)), label="Contact line")
+    if _series_differs(spread, d_rim):
+        ax.plot(t, d_rim / m.d0_mm, color=PALETTE["rim"],
+                lw=1.3, ls=(0, (1.5, 1.5)), label="Rim to rim")
+
+    ax.plot(t, m.beta[w], color=PALETTE["hero"], lw=1.8, marker="o",
             ms=3.4, mfc="white", mew=1.1, label=r"Spreading, $\beta$")
 
-    if _series_differs(run["d_spread"], run["d_contact"]):
-        ax.plot(t, run["d_contact"] / d0, color=PALETTE["contact"],
-                lw=1.3, ls=(0, (4, 2)), label=r"Contact line")
-    if _series_differs(run["d_spread"], run["d_rim"]):
-        ax.plot(t, run["d_rim"] / d0, color=PALETTE["rim"],
-                lw=1.3, ls=(0, (1.5, 1.5)), label=r"Rim to rim")
-
     ax.axhline(1.0, color=PALETTE["neutral_mid"], lw=0.7, ls=(0, (3, 3)))
-    ax.axvline(m["t_max_ms"], color=PALETTE["neutral_mid"], lw=0.6,
-               ls=(0, (2, 3)))
+    # boundary line stops below the peak annotation
+    ax.axvline(m.t_max_ms, color=PALETTE["neutral_mid"], lw=0.6,
+               ls=(0, (2, 3)), ymax=0.84)
 
-    t_end = float(t[-1])
-    if k > 0:
-        ax.axvspan(0.0, m["t_max_ms"], color=PALETTE["hero"], alpha=0.06,
-                   lw=0)
-        ax.text(m["t_max_ms"] / 2, ax.get_ylim()[1] * 0.98,
-                "Spreading", ha="center", va="top", fontsize=6.5,
-                color=PALETTE["neutral_mid"])
-        if t_end > m["t_max_ms"]:
-            ax.text((m["t_max_ms"] + t_end) / 2, ax.get_ylim()[1] * 0.98,
-                    "Recoil / relaxation", ha="center", va="top",
-                    fontsize=6.5, color=PALETTE["neutral_mid"])
-
-    ax.plot(m["t_max_ms"], m["beta_max"], marker="v", ms=5,
+    ax.plot(m.t_max_ms, m.beta_max, marker="v", ms=5,
             color=PALETTE["hero"], mfc=PALETTE["hero"], zorder=5)
-    # peak is a local maximum, so the region directly below it is clear
     ax.annotate(
-        rf"$\beta_{{\max}}={m['beta_max']:.2f}$" + "\n"
-        + rf"$t={m['t_max_ms']:.2f}$ ms",
-        xy=(m["t_max_ms"], m["beta_max"]),
-        xytext=(0, -30),
-        textcoords="offset points", fontsize=7,
-        arrowprops=dict(arrowstyle="-", lw=0.6,
-                        color=PALETTE["neutral_mid"]),
-        ha="center",
+        rf"$\beta_{{\max}}={m.beta_max:.2f}$, $t={m.t_max_ms:.2f}$ ms",
+        xy=(m.t_max_ms, m.beta_max),
+        xytext=(0, 5), textcoords="offset points",
+        fontsize=6.6, ha="center", va="bottom", bbox=ANNOTATION_BOX,
     )
 
     ax.set_xlabel("Time after impact (ms)")
     ax.set_ylabel(r"Spreading factor $\beta = d/D_0$")
-    ax.set_xlim(left=0)
+    ax.set_xlim(0.0, win_end * 1.03)
+    ax.set_ylim(top=m.beta_max * 1.24)
     ax.locator_params(axis="y", nbins=6)
 
-    # dimensionless top axis when impact velocity is supplied
-    if u0 is not None:
-        # tau = t_s U / D_m = (t_ms/1000) U / (D_mm/1000) = t_ms U / D_mm
+    # dimensionless top axis when impact velocity is supplied:
+    # tau = (t_ms/1000) U / (D_mm/1000) = t_ms U / D_mm
+    if impact_velocity is not None:
         ax2 = ax.twiny()
         ax2.set_xlim(ax.get_xlim())
         ax2.set_xbound(ax.get_xbound())
         ticks = ax.get_xticks()
         ax2.set_xticks(ticks)
-        ax2.set_xticklabels([f"{tk * u0 / d0:.1f}" for tk in ticks])
-        ax2.set_xlabel(r"Dimensionless time $\tau = tU_0/D_0$", fontsize=7)
+        ax2.set_xticklabels(
+            [f"{tk * impact_velocity / m.d0_mm:.1f}" for tk in ticks]
+        )
+        ax2.set_xlabel(r"Dimensionless time $\tau = tU_0/D_0$",
+                       fontsize=7)
         ax2.spines["top"].set_visible(True)
         ax2.spines["top"].set_linewidth(0.8)
         ax2.tick_params(length=2.0, width=0.7, labelsize=6.5)
 
-    # condition text (top-left inside axes); fall back to the surface angle
-    # recorded in run_params.json when --tilt is not supplied
-    tilt = args.tilt
-    if tilt is None and run.get("surface_angle_deg") is not None:
-        tilt = run["surface_angle_deg"]
-    info = _condition_lines(run, m, u0, tilt)
-    ax.text(
-        0.02, 0.97, "\n".join(info), transform=ax.transAxes,
-        fontsize=6.6, va="top", ha="left", color="#333333",
-        bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="none", alpha=0.75),
-    )
     ax.legend(loc="lower right", ncol=1, handlelength=1.8)
 
-    # --- panel b: incoming droplet geometry -------------------------------
-    ax = ax_b
-    entries: list[tuple[str, float]] = []
-    p = run["d_parallel"]
-    n = run["d_normal"]
-    va = run["d_eq_v"]
-    aa = run["d_eq_a"]
-    if np.isfinite(p).any():
-        entries.append((r"$D_\parallel$", float(p[0])))
-    if np.isfinite(aa).any():
-        entries.append((r"$D_{\mathrm{eq,A}}$", float(aa[0])))
-    if np.isfinite(va).any():
-        entries.append((r"$D_{\mathrm{eq,V}}$", float(va[0])))
-    if np.isfinite(n).any():
-        entries.append((r"$D_\perp$", float(n[0])))
 
-    if entries:
-        ys = np.arange(len(entries))[::-1]
-        vals = np.array([e[1] for e in entries])
-        x_left = float(vals.min() - (vals.max() - vals.min() + 0.3) * 0.6)
-        for y, (lab, val) in zip(ys, entries):
-            ax.hlines(y, x_left, val, color=PALETTE["neutral_mid"], lw=0.7)
-            ax.plot(val, y, marker="o", ms=4, color=PALETTE["hero"])
-            ax.text(val + 0.02, y, f"{val:.3f}", va="center", fontsize=6.5)
-        ax.set_yticks(ys)
-        ax.set_yticklabels([e[0] for e in entries])
-        ax.set_xlim(x_left, float(vals.max()) * 1.06)
-        ax.set_xlabel("Diameter (mm)")
-        title = "Incoming droplet"
-        if m["aspect_ratio"] is not None:
-            title += "\n" + rf"$D_\parallel/D_\perp={m['aspect_ratio']:.3f}$"
-        ax.set_title(title, fontsize=7.3, pad=3)
-    else:
+def build_panel_geometry(ax, run: RunData, m: RunMetrics) -> None:
+    """Panel b: incoming droplet reference geometry (horizontal lollipop)."""
+    entries: list[tuple[str, float]] = []
+    if np.isfinite(run.d_parallel).any():
+        entries.append((r"$D_\parallel$", float(run.d_parallel[0])))
+    if np.isfinite(run.d_eq_a).any():
+        entries.append((r"$D_{\mathrm{eq,A}}$", float(run.d_eq_a[0])))
+    if np.isfinite(run.d_eq_v).any():
+        entries.append((r"$D_{\mathrm{eq,V}}$", float(run.d_eq_v[0])))
+    if np.isfinite(run.d_normal).any():
+        entries.append((r"$D_\perp$", float(run.d_normal[0])))
+
+    if not entries:
         ax.text(0.5, 0.5, "Reference geometry\nnot available",
                 transform=ax.transAxes, ha="center", va="center",
                 fontsize=7, color=PALETTE["neutral_mid"])
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
+        return
 
-    # --- panel c: contact-line velocity -----------------------------------
-    ax = ax_c
-    u = m["u_cl"]
-    if u0 is not None:
-        u_plot = u / u0
-        ylab = r"Contact-line velocity $u_{\mathrm{cl}}/U_0$"
+    ys = np.arange(len(entries))[::-1]
+    vals = np.array([e[1] for e in entries])
+    x_left = float(vals.min() - (vals.max() - vals.min() + 0.3) * 0.6)
+    for y, (_, val) in zip(ys, entries):
+        ax.hlines(y, x_left, val, color=PALETTE["neutral_mid"], lw=0.7)
+        ax.plot(val, y, marker="o", ms=4, color=PALETTE["hero"])
+        ax.text(val + 0.02, y, f"{val:.3f}", va="center", fontsize=6.5)
+    ax.set_yticks(ys)
+    ax.set_yticklabels([e[0] for e in entries])
+    ax.set_xlim(x_left, float(vals.max()) * 1.06)
+    ax.set_xlabel("Diameter (mm)")
+    title = "Incoming droplet"
+    if m.aspect_ratio is not None:
+        title += "\n" + rf"$D_\parallel/D_\perp={m.aspect_ratio:.3f}$"
+    ax.set_title(title, fontsize=7.3, pad=3)
+
+
+def build_panel_velocity(ax, run: RunData, m: RunMetrics, *,
+                         impact_velocity: float | None = None,
+                         window: np.ndarray | None = None) -> None:
+    """Panel c: contact-line velocity with sign-coloured regions."""
+    w = np.ones(run.n_rows, dtype=bool) if window is None else window
+    t = run.t_ms[w]
+    win_end = float(t[-1])
+    u = m.u_cl[w]
+
+    if impact_velocity is not None:
+        u_plot = u / impact_velocity
+        ylabel = r"Contact-line velocity $u_{\mathrm{cl}}/U_0$"
     else:
         u_plot = u
-        ylab = r"Contact-line velocity (m s$^{-1}$)"
+        ylabel = r"Contact-line velocity (m s$^{-1}$)"
+
     ax.plot(t, u_plot, color=PALETTE["hero"], lw=1.4)
     ax.fill_between(t, u_plot, 0, where=(u_plot > 0),
                     color=PALETTE["up"], alpha=0.10, lw=0)
     ax.fill_between(t, u_plot, 0, where=(u_plot < 0),
                     color=PALETTE["down"], alpha=0.10, lw=0)
     ax.axhline(0, color=PALETTE["neutral_mid"], lw=0.7)
-    if np.isfinite(m["u_peak_m_s"]):
-        upk = m["u_peak_m_s"] / u0 if u0 is not None else m["u_peak_m_s"]
-        ax.plot(m["t_u_peak_ms"], upk, marker="v", ms=4.5,
-                color=PALETTE["hero"], mfc=PALETTE["hero"])
-        if u0 is not None:
-            txt = rf"$u_{{\max}}/U_0={upk:.2f}$"
-        else:
-            txt = rf"$u_{{\max}}={upk:.2f}$"
-        ax.annotate(txt, xy=(m["t_u_peak_ms"], upk),
-                    xytext=(6, -4), textcoords="offset points",
-                    fontsize=6.6, ha="left")
-    ax.set_xlabel("Time after impact (ms)")
-    ax.set_ylabel(ylab)
-    ax.set_xlim(left=0)
 
-    # --- panel d: lamella morphology --------------------------------------
-    ax = ax_d
-    px = run["pixel_mm_per_px"]
-    d0_px = d0 / px if px else np.nan
+    # peak marker + label above the curve (peak lies inside the window)
+    if math.isfinite(m.u_peak_m_s) and m.t_u_peak_ms <= win_end:
+        upk = (
+            m.u_peak_m_s / impact_velocity
+            if impact_velocity is not None
+            else m.u_peak_m_s
+        )
+        ax.plot(m.t_u_peak_ms, upk, marker="v", ms=4.5,
+                color=PALETTE["hero"], mfc=PALETTE["hero"])
+        if impact_velocity is not None:
+            text = rf"$u_{{\max}}/U_0={upk:.2f}$"
+        else:
+            text = rf"$u_{{\max}}={upk:.2f}$"
+        ax.annotate(text, xy=(m.t_u_peak_ms, upk),
+                    xytext=(3, 4), textcoords="offset points",
+                    fontsize=6.6, ha="left", va="bottom",
+                    bbox=ANNOTATION_BOX)
+        ax.set_ylim(top=float(np.nanmax(u_plot)) * 1.32)
+
+    ax.set_xlabel("Time after impact (ms)")
+    ax.set_ylabel(ylabel)
+    ax.set_xlim(0.0, win_end * 1.03)
+
+
+def build_panel_morphology(ax, run: RunData, m: RunMetrics, *,
+                           window: np.ndarray | None = None) -> None:
+    """Panel d: projected area and mean lamella thickness."""
+    w = np.ones(run.n_rows, dtype=bool) if window is None else window
+    t = run.t_ms[w]
+    win_end = float(t[-1])
+    px = run.pixel_mm_per_px
+
+    d0_px = m.d0_mm / px if px else np.nan
     if math.isfinite(d0_px):
         a0_px2 = math.pi / 4.0 * d0_px**2
     else:
-        a0_px2 = float(run["area_px2"][0])
-    a_ratio = run["area_px2"] / a0_px2
+        a0_px2 = float(run.area_px2[w][0])
+    a_ratio = run.area_px2[w] / a0_px2
 
-    ax.plot(t, a_ratio, color=PALETTE["morph"], lw=1.5,
-            label=r"$A/A_0$")
-    ax.fill_between(t, a_ratio, a_ratio.min(), color=PALETTE["morph"],
-                    alpha=0.08, lw=0)
+    ax.plot(t, a_ratio, color=PALETTE["morph"], lw=1.5, label=r"$A/A_0$")
+    ax.fill_between(t, a_ratio, float(np.nanmin(a_ratio)),
+                    color=PALETTE["morph"], alpha=0.08, lw=0)
     ax.set_xlabel("Time after impact (ms)")
     ax.set_ylabel(r"Projected area $A/A_0$", color=PALETTE["morph"])
     ax.tick_params(axis="y", colors=PALETTE["morph"])
     ax.spines["left"].set_color(PALETTE["morph"])
-    ax.set_xlim(left=0)
+    ax.set_xlim(0.0, win_end * 1.03)
 
-    # mean lamella thickness h = A_physical / d_spread
+    # mean thickness h = A_physical / d_spread; unreliable early, mask it
     if px:
-        a_mm2 = run["area_px2"] * px**2
+        a_mm2 = run.area_px2[w] * px**2
         with np.errstate(divide="ignore", invalid="ignore"):
-            h_mm = np.where(run["d_spread"] > 0.5 * d0,
-                            a_mm2 / run["d_spread"], np.nan)
-        h_norm = h_mm / d0
+            h_mm = np.where(
+                run.d_spread[w] > 0.5 * m.d0_mm,
+                a_mm2 / run.d_spread[w], np.nan,
+            )
         ax2 = ax.twinx()
-        ax2.plot(t, h_norm, color=PALETTE["thickness"], lw=1.2,
-                 ls=(0, (3, 2)), label=r"$h/D_0$")
+        ax2.plot(t, h_mm / m.d0_mm, color=PALETTE["thickness"],
+                 lw=1.2, ls=(0, (3, 2)), label=r"$h/D_0$")
         ax2.set_ylabel(r"Mean thickness $h/D_0$",
                        color=PALETTE["thickness"], fontsize=7.5)
         ax2.tick_params(axis="y", colors=PALETTE["thickness"],
@@ -581,30 +699,126 @@ def figure_single(run: dict, m: dict, args, outdir: Path) -> list[Path]:
     i_min = int(np.nanargmin(a_ratio))
     ax.plot(t[i_min], a_ratio[i_min], marker="o", ms=4,
             color=PALETTE["morph"])
-    ax.annotate(rf"max flattening" + "\n"
-                + rf"$A/A_0={a_ratio[i_min]:.2f}$",
-                xy=(t[i_min], a_ratio[i_min]),
-                xytext=(8, 12), textcoords="offset points", fontsize=6.6,
-                arrowprops=dict(arrowstyle="-", lw=0.6,
-                                color=PALETTE["neutral_mid"]))
+    ax.annotate(
+        "max flattening\n" + rf"$A/A_0={a_ratio[i_min]:.2f}$",
+        xy=(t[i_min], a_ratio[i_min]),
+        xytext=(8, 12), textcoords="offset points", fontsize=6.6,
+        arrowprops=dict(arrowstyle="-", lw=0.6,
+                        color=PALETTE["neutral_mid"]),
+        bbox=ANNOTATION_BOX,
+    )
 
-    for ax_, lab in zip((ax_a, ax_b, ax_c, ax_d), "abcd"):
-        panel_label(ax_, lab)
 
-    stem = f"spreading_dynamics_{_safe(run['tag'])}"
+# ===========================================================================
+# 6. Single-run figure assembly
+# ===========================================================================
+
+
+def figure_single(run: RunData, m: RunMetrics, args,
+                  outdir: Path) -> list[Path]:
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+
+    fig = plt.figure(figsize=(7.2, 4.7))
+    gs = GridSpec(
+        2, 6, figure=fig,
+        hspace=0.62, wspace=1.35,
+        left=0.07, right=0.985, top=0.86, bottom=0.12,
+    )
+    ax_a = fig.add_subplot(gs[0, 0:4])
+    ax_b = fig.add_subplot(gs[0, 4:6])
+    ax_c = fig.add_subplot(gs[1, 0:2])
+    ax_d = fig.add_subplot(gs[1, 2:6])
+
+    window = dynamics_window(run, m)
+    build_panel_beta(ax_a, run, m,
+                     impact_velocity=args.impact_velocity, window=window)
+    build_panel_geometry(ax_b, run, m)
+    build_panel_velocity(ax_c, run, m,
+                         impact_velocity=args.impact_velocity, window=window)
+    build_panel_morphology(ax_d, run, m, window=window)
+
+    for ax, label in zip((ax_a, ax_b, ax_c, ax_d), "abcd"):
+        panel_label(ax, label)
+
+    # condition metadata occupies its own line above the panels
+    tilt = effective_tilt(run, args.tilt)
+    summary = condition_summary(m, args.impact_velocity, tilt)
+    fig.text(0.07, 0.955, summary, fontsize=7, ha="left", va="center")
+
+    stem = f"spreading_dynamics_{_safe(run.tag)}"
     return save_figure(fig, outdir, stem, args.formats, args.dpi)
 
 
-# ---------------------------------------------------------------------------
-# Multi-run comparison figure
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 7. Comparison panel builders and figure assembly
+# ===========================================================================
 
-def figure_comparison(runs: list[dict], metrics: list[dict],
+
+def build_panel_overlay(ax, runs: list[RunData],
+                        metrics: list[RunMetrics],
+                        colors: list[str]) -> None:
+    """Comparison panel a: beta(t) overlay with direct end labels."""
+    label_targets: list[tuple[float, float, str, str]] = []
+    for run, m, color in zip(runs, metrics, colors):
+        w = dynamics_window(run, m)
+        t, beta = run.t_ms[w], m.beta[w]
+        ax.plot(t, beta, color=color, lw=1.6, label=m.tag)
+        ax.plot(m.t_max_ms, m.beta_max, marker="v", ms=4.5,
+                color=color, mfc=color)
+        label_targets.append((float(t[-1]), float(beta[-1]),
+                              m.tag, color))
+
+    ax.axhline(1.0, color=PALETTE["neutral_mid"], lw=0.7, ls=(0, (3, 3)))
+    ax.set_xlabel("Time after impact (ms)")
+    ax.set_ylabel(r"Spreading factor $\beta = d/D_0$")
+
+    x_end = max(target[0] for target in label_targets)
+    ax.set_xlim(0.0, x_end * 1.28)
+
+    # greedy de-collision of direct end labels
+    yspan = float(ax.get_ylim()[1] - ax.get_ylim()[0])
+    min_dy = 0.075 * yspan
+    placed: list[tuple[float, float]] = []
+    for x, y, tag, color in sorted(label_targets, key=lambda z: z[1]):
+        y_adj = y
+        for _, py in placed:
+            if abs(y_adj - py) < min_dy:
+                y_adj = py + min_dy
+        placed.append((x, y_adj))
+        ax.plot([x, x_end * 1.04], [y, y_adj], color=color,
+                lw=0.5, ls=(0, (2, 2)))
+        ax.text(x_end * 1.06, y_adj, tag, color=color,
+                fontsize=7, va="center", ha="left")
+    ax.set_ylim(top=float(ax.get_ylim()[1]) * 1.06)
+
+
+def build_panel_summary_bar(ax, tags: list[str], colors: list[str],
+                            values: list[float], *, ylabel: str,
+                            title: str, refline: float | None = None) -> None:
+    """Comparison panel b/c: scalar summary as coloured bars."""
+    x = np.arange(len(tags))
+    ax.bar(x, values, color=colors, width=0.66, lw=0)
+    vmax = max(values)
+    for xi, value in zip(x, values):
+        ax.text(xi, value + vmax * 0.02, f"{value:.2f}",
+                ha="center", va="bottom", fontsize=6.5)
+    if refline is not None:
+        ax.axhline(refline, color=PALETTE["neutral_mid"],
+                   lw=0.7, ls=(0, (3, 3)))
+    ax.set_xticks(x)
+    ax.set_xticklabels(tags, rotation=35, ha="right", fontsize=6.3)
+    ax.set_ylabel(ylabel, fontsize=7.5)
+    ax.set_ylim(0.0, vmax * 1.16)
+    ax.set_title(title, fontsize=7.5)
+
+
+def figure_comparison(runs: list[RunData], metrics: list[RunMetrics],
                       args, outdir: Path) -> list[Path]:
     import matplotlib.pyplot as plt
     from matplotlib.gridspec import GridSpec
 
-    fig = plt.figure(figsize=(7.2, 4.6))
+    fig = plt.figure(figsize=(7.2, 4.7))
     gs = GridSpec(
         2, 6, figure=fig,
         hspace=0.95, wspace=1.3,
@@ -614,71 +828,18 @@ def figure_comparison(runs: list[dict], metrics: list[dict],
     ax_b = fig.add_subplot(gs[0, 4:6])
     ax_c = fig.add_subplot(gs[1, 4:6])
 
-    tags = [r["tag"] for r in runs]
+    tags = [r.tag for r in runs]
     colors = [RUN_COLORS[i % len(RUN_COLORS)] for i in range(len(runs))]
 
-    # --- panel a: beta(t) overlay with direct labels ----------------------
-    ax = ax_a
-    label_targets: list[tuple[float, float, str, str]] = []
-    for run, m, color in zip(runs, metrics, colors):
-        t = run["t_ms"]
-        ax.plot(t, m["beta"], color=color, lw=1.6, label=m["tag"])
-        ax.plot(m["t_max_ms"], m["beta_max"], marker="v", ms=4.5,
-                color=color, mfc=color)
-        label_targets.append((float(t[-1]), float(m["beta"][-1]),
-                              m["tag"], color))
-
-    ax.axhline(1.0, color=PALETTE["neutral_mid"], lw=0.7, ls=(0, (3, 3)))
-    ax.set_xlabel("Time after impact (ms)")
-    ax.set_ylabel(r"Spreading factor $\beta = d/D_0$")
-    ax.set_xlim(left=0)
-
-    t_max_all = max(tg[0] for tg in label_targets)
-    ax.set_xlim(0, t_max_all * 1.24)
-
-    # greedy de-collision of direct end labels
-    yspan = float(ax.get_ylim()[1] - ax.get_ylim()[0])
-    min_dy = 0.075 * yspan
-    placed: list[tuple[float, float]] = []
-    for x, y, tag, color in sorted(label_targets, key=lambda z: z[1]):
-        y_adj = y
-        for px_, py_ in placed:
-            if abs(y_adj - py_) < min_dy:
-                y_adj = py_ + min_dy
-        placed.append((x, y_adj))
-        ax.plot([x, t_max_all * 1.03], [y, y_adj], color=color,
-                lw=0.5, ls=(0, (2, 2)))
-        ax.text(t_max_all * 1.045, y_adj, tag, color=color,
-                fontsize=7, va="center", ha="left")
-    ax.set_ylim(top=float(ax.get_ylim()[1]) * 1.06)
-
-    # --- panel b: beta_max bars -------------------------------------------
-    ax = ax_b
-    x = np.arange(len(runs))
-    bmax = [m["beta_max"] for m in metrics]
-    ax.bar(x, bmax, color=colors, width=0.66, lw=0)
-    for xi, v in zip(x, bmax):
-        ax.text(xi, v + max(bmax) * 0.02, f"{v:.2f}", ha="center",
-                va="bottom", fontsize=6.5)
-    ax.axhline(1.0, color=PALETTE["neutral_mid"], lw=0.7, ls=(0, (3, 3)))
-    ax.set_xticks(x)
-    ax.set_xticklabels(tags, rotation=35, ha="right", fontsize=6.3)
-    ax.set_ylabel(r"$\beta_{\max}$", fontsize=7.5)
-    ax.set_ylim(0, max(bmax) * 1.16)
-    ax.set_title("Maximum spreading", fontsize=7.5)
-
-    # --- panel c: t_max bars ----------------------------------------------
-    ax = ax_c
-    tmax = [m["t_max_ms"] for m in metrics]
-    ax.bar(x, tmax, color=colors, width=0.66, lw=0, alpha=0.85)
-    for xi, v in zip(x, tmax):
-        ax.text(xi, v + max(tmax) * 0.02, f"{v:.2f}", ha="center",
-                va="bottom", fontsize=6.5)
-    ax.set_xticks(x)
-    ax.set_xticklabels(tags, rotation=35, ha="right", fontsize=6.3)
-    ax.set_ylabel(r"$t_{\max}$ (ms)", fontsize=7.5)
-    ax.set_ylim(0, max(tmax) * 1.16)
-    ax.set_title("Time to maximum", fontsize=7.5)
+    build_panel_overlay(ax_a, runs, metrics, colors)
+    build_panel_summary_bar(
+        ax_b, tags, colors, [m.beta_max for m in metrics],
+        ylabel=r"$\beta_{\max}$", title="Maximum spreading", refline=1.0,
+    )
+    build_panel_summary_bar(
+        ax_c, tags, colors, [m.t_max_ms for m in metrics],
+        ylabel=r"$t_{\max}$ (ms)", title="Time to maximum",
+    )
 
     panel_label(ax_a, "a")
     panel_label(ax_b, "b")
@@ -688,33 +849,34 @@ def figure_comparison(runs: list[dict], metrics: list[dict],
                        args.formats, args.dpi)
 
 
-# ---------------------------------------------------------------------------
-# Metrics summary
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 8. Metrics summary CSV
+# ===========================================================================
 
-def write_summary(runs: list[dict], metrics: list[dict],
+
+def write_summary(runs: list[RunData], metrics: list[RunMetrics],
                   outdir: Path) -> Path:
     out = outdir / "spreading_metrics_summary.csv"
-    cols = [
+    columns = [
         "tag", "n_frames", "duration_ms", "d0_mm", "d0_source",
         "beta_max", "t_max_ms", "beta_final", "u_peak_m_s",
         "t_u_peak_ms", "aspect_ratio", "weber_number", "reynolds_number",
     ]
     with out.open("w", encoding="utf-8", newline="") as fh:
         writer = csv.writer(fh)
-        writer.writerow(cols)
+        writer.writerow(columns)
         for run, m in zip(runs, metrics):
             writer.writerow([
-                m["tag"], run["n_rows"],
-                f"{float(run['t_ms'][-1]):.3f}",
-                f"{m['d0_mm']:.4f}", m["d0_source"],
-                f"{m['beta_max']:.4f}", f"{m['t_max_ms']:.3f}",
-                f"{m['beta_final']:.4f}",
-                f"{m['u_peak_m_s']:.4f}" if math.isfinite(m["u_peak_m_s"]) else "",
-                f"{m['t_u_peak_ms']:.3f}" if math.isfinite(m["t_u_peak_ms"]) else "",
-                f"{m['aspect_ratio']:.4f}" if m["aspect_ratio"] is not None else "",
-                f"{m['we']:.2f}" if m["we"] is not None else "",
-                f"{m['re']:.1f}" if m["re"] is not None else "",
+                m.tag, run.n_rows,
+                f"{float(run.t_ms[-1]):.3f}",
+                f"{m.d0_mm:.4f}", m.d0_source,
+                f"{m.beta_max:.4f}", f"{m.t_max_ms:.3f}",
+                f"{m.beta_final:.4f}",
+                f"{m.u_peak_m_s:.4f}" if math.isfinite(m.u_peak_m_s) else "",
+                f"{m.t_u_peak_ms:.3f}" if math.isfinite(m.t_u_peak_ms) else "",
+                f"{m.aspect_ratio:.4f}" if m.aspect_ratio is not None else "",
+                f"{m.we:.2f}" if m.we is not None else "",
+                f"{m.re:.1f}" if m.re is not None else "",
             ])
     return out
 
@@ -723,46 +885,49 @@ def _safe(tag: str) -> str:
     return "".join(c if c.isalnum() or c in "-_." else "_" for c in tag)
 
 
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# 9. CLI
+# ===========================================================================
+
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Render publication-quality figures from "
-                    "spreading_diameter.csv + run_params.json result files.",
+                    "spreading_diameter.csv result files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    p.add_argument("csvs", nargs="+", type=Path,
-                   help="One or more spreading_diameter.csv files")
-    p.add_argument("-o", "--output-dir", type=Path, default=None,
-                   help="Figure output directory (default: <csv parent>/figures)")
-    p.add_argument("--labels", nargs="+", default=None,
-                   help="Display tags matching the input files, in order")
-    p.add_argument("--d0", choices=("auto", "volume", "area"), default="auto",
-                   help="Reference diameter D0 source")
-    p.add_argument("-u", "--impact-velocity", type=float, default=None,
-                   metavar="M_S", help="Impact velocity U0 (m/s)")
-    p.add_argument("--density", type=float, default=None,
-                   help="Liquid density (kg/m^3), for We / Re")
-    p.add_argument("--surface-tension", type=float, default=None,
-                   help="Surface tension (N/m), for We")
-    p.add_argument("--viscosity", type=float, default=None,
-                   help="Dynamic viscosity (Pa s), for Re")
-    p.add_argument("--tilt", type=float, default=None,
-                   help="Substrate tilt / impact angle (degrees)")
-    p.add_argument("--formats", default="pdf,png",
-                   help="Comma-separated export formats: pdf,png,svg,tiff")
-    p.add_argument("--dpi", type=int, default=600,
-                   help="Raster export DPI")
-    return p
+    parser.add_argument("csvs", nargs="+", type=Path,
+                        help="One or more spreading_diameter.csv files")
+    parser.add_argument("-o", "--output-dir", type=Path, default=None,
+                        help="Figure output directory "
+                             "(default: <csv parent>/figures)")
+    parser.add_argument("--labels", nargs="+", default=None,
+                        help="Display tags matching the input files, in order")
+    parser.add_argument("--d0", choices=("auto", "volume", "area"),
+                        default="auto", help="Reference diameter D0 source")
+    parser.add_argument("-u", "--impact-velocity", type=float, default=None,
+                        metavar="M_S", help="Impact velocity U0 (m/s)")
+    parser.add_argument("--density", type=float, default=None,
+                        help="Liquid density (kg/m^3), for We / Re")
+    parser.add_argument("--surface-tension", type=float, default=None,
+                        help="Surface tension (N/m), for We")
+    parser.add_argument("--viscosity", type=float, default=None,
+                        help="Dynamic viscosity (Pa s), for Re")
+    parser.add_argument("--tilt", type=float, default=None,
+                        help="Substrate tilt / impact angle (degrees)")
+    parser.add_argument("--formats", default="pdf,png",
+                        help="Comma-separated export formats: pdf,png,svg,tiff")
+    parser.add_argument("--dpi", type=int, default=600,
+                        help="Raster export DPI")
+    return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    args.formats = [f.strip().lower() for f in args.formats.split(",") if f.strip()]
+    args.formats = [
+        f.strip().lower() for f in args.formats.split(",") if f.strip()
+    ]
 
-    # validate inputs
     for path in args.csvs:
         if not path.is_file():
             print(f"ERROR: input file not found: {path}", file=sys.stderr)
@@ -779,21 +944,23 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
+
     if args.labels:
         for run, label in zip(runs, args.labels):
-            run["tag"] = label
+            run.tag = label
 
-    # shared physical properties
+    metrics: list[RunMetrics] = []
     for run in runs:
-        run["rho"] = args.density
-        run["sigma"] = args.surface_tension
-        run["mu"] = args.viscosity
-
-    metrics: list[dict] = []
-    for run in runs:
-        d0_mm, d0_src = reference_diameter(run, args.d0)
-        metrics.append(compute_metrics(run, d0_mm, d0_src,
-                                       args.impact_velocity))
+        d0_mm, d0_source = reference_diameter(run, args.d0)
+        metrics.append(
+            evaluate_run(
+                run,
+                d0_mm=d0_mm, d0_source=d0_source,
+                impact_velocity=args.impact_velocity,
+                rho=args.density, sigma=args.surface_tension,
+                mu=args.viscosity,
+            )
+        )
 
     if args.output_dir is not None:
         outdir = args.output_dir
