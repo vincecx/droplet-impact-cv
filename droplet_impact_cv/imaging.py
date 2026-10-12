@@ -202,7 +202,8 @@ def foreground_mask(
 ) -> np.ndarray:
     yy, xx = np.indices(image.shape)
     distance_from_surface = yy - surface_line.y_at(xx, image.shape[1])
-    roi = distance_from_surface <= config.foreground_depth_px
+    top_rows = excluded_top_rows(image.shape[0], config.top_exclusion_ratio)
+    roi = (distance_from_surface <= config.foreground_depth_px) & (yy >= top_rows)
     changed = hysteresis_change_mask(
         image,
         background,
@@ -211,7 +212,16 @@ def foreground_mask(
         roi,
         config.weak_reach_px,
     )
-    return clean_binary_mask(changed.astype(np.uint8), structure)
+    mask = clean_binary_mask(changed.astype(np.uint8), structure)
+    # Cleanup can expand the outline, so enforce the exclusion again afterwards.
+    mask[:top_rows] = 0
+    return mask
+
+
+def excluded_top_rows(height: int, ratio: float) -> int:
+    if not 0.0 <= ratio <= 1.0:
+        raise ValueError("top_exclusion_ratio must be in the range [0, 1]")
+    return math.ceil(height * ratio)
 
 
 def full_foreground_mask(
@@ -525,6 +535,9 @@ def component_measurement(
     config: AnalysisConfig,
     preferred_center_x: float | None = None,
 ) -> ComponentMeasurement:
+    top_rows = excluded_top_rows(mask.shape[0], config.top_exclusion_ratio)
+    mask = mask.copy()
+    mask[:top_rows] = 0
     component, area = select_liquid_component(
         mask, surface_line, config, preferred_center_x
     )
@@ -534,6 +547,7 @@ def component_measurement(
     # Seal apparent holes that open through a few pixels near the substrate,
     # then treat the selected droplet's enclosed bright regions as liquid.
     component = fill_droplet_interior(component, surface_line)
+    component[:top_rows] = False
     aligned_dimensions = surface_aligned_dimensions(component, surface_line)
     # Circle with the same filled silhouette area; measure before surface clipping,
     # as for the volume-equivalent diameter and the two projection spans.

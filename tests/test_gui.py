@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import sys
 import time
 import tkinter as tk
@@ -13,7 +14,7 @@ from unittest.mock import patch
 import numpy as np
 import tifffile
 
-from droplet_impact_cv.analysis import analyze_sequence
+from droplet_impact_cv.analysis import analyze_sequence, prepare_sequence
 from droplet_impact_cv.gui import (
     PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, PreviewViewport,
     load_folder_config, resolve_output_config, save_folder_config, surface_values_from_points,
@@ -72,6 +73,23 @@ class PreviewTests(unittest.TestCase):
         self.assertEqual(config.fps, 4000)
         self.assertEqual(config.weak_reach_px, 40)
 
+    def test_top_exclusion_preserves_background_calibration_and_matches_batch(self):
+        config = replace(load_folder_config(self.folder), surface_calibration_frame=5, reflection_mode="none")
+        full = prepare_sequence(replace(config, top_exclusion_ratio=0))
+        excluded = prepare_sequence(replace(config, top_exclusion_ratio=1))
+        np.testing.assert_array_equal(full.background, excluded.background)
+        self.assertEqual(full.surface_line, excluded.surface_line)
+        self.assertEqual(full.target_center_x, excluded.target_center_x)
+        self.assertEqual(full.threshold, excluded.threshold)
+        self.assertTrue(full.measure(full.files[-1])[1].mask.any())
+        self.assertFalse(excluded.measure(excluded.files[-1])[1].mask.any())
+        session = PreviewSession.open(self.folder)
+        _, _, details = session.preview(1, {"top_exclusion_ratio": 1})
+        self.assertIn("Area: 0 px2", details)
+        self.assertFalse(session.prepared.measure(session.prepared.files[1])[1].mask.any())
+        rows = analyze_sequence(replace(config, top_exclusion_ratio=1, debug_dir=None))
+        self.assertTrue(all(row.droplet_area_px2 == 0 for row in rows))
+
     def test_output_choices_keep_debug_overlays_inside_selected_folder(self):
         config = replace(load_folder_config(self.folder),
                          output_csv=self.folder / "configured.csv", debug_dir=self.folder / "old-debug")
@@ -101,7 +119,7 @@ class PreviewTests(unittest.TestCase):
             load_folder_config(self.folder), fps=1234.5, hydrophobic=True,
             strong_threshold=None, weak_threshold=None, surface_y_px=None,
             surface_angle_deg=-1.25, surface_calibration_frame=None,
-            droplet_size_ref_frame=3, start_frame=2, end_frame=5,
+            droplet_size_ref_frame=3, start_frame=2, end_frame=5, top_exclusion_ratio=0.4,
             output_csv=self.folder / "output's folder" / "result.csv",
             debug_dir=self.folder / "output's folder" / "debug overlays",
         )
@@ -254,6 +272,8 @@ class GuiControlTests(unittest.TestCase):
             self.skipTest(f"Tk display unavailable: {error}")
         self.root.withdraw()
         self.root.update_idletasks()
+        # Release Tk callback cycles on the UI thread before workflow workers start.
+        self.addCleanup(gc.collect)
         self.addCleanup(self.root.destroy)
 
     def test_save_dialog_cancel_backup_and_overwrite(self):
@@ -318,12 +338,70 @@ class GuiControlTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             control.get_value()
 
+    def test_slider_track_click_jumps_to_position_and_preserves_thumb_drag(self):
+        spec = next(spec for spec in PARAMETERS if spec.name == "weak_reach_px")
+        changes = []
+        control = ParameterControl(self.root, spec, lambda: changes.append(control.get_value()))
+        control.pack(fill="x")
+        self.root.geometry("600x250")
+        self.root.deiconify()
+        self.root.update_idletasks()
+        # Include values outside the suggested range, as when loading a config.
+        control.set_value(500, 500)
+        width, y = control.slider.winfo_width(), control.slider.winfo_height() // 2
+        for fraction in (0.25, 0.75, 0, 1):
+            x = round((width - 1) * fraction)
+            expected = round(float(control.slider.get(x, y)))
+            control.slider.event_generate("<ButtonPress-1>", x=x, y=y)
+            control.slider.event_generate("<ButtonRelease-1>", x=x, y=y)
+            self.assertEqual(control.get_value(), expected)
+            self.assertEqual(control.slider.get(), expected)
+        self.assertTrue(changes)
+        control.set_value(100, 100)
+        self.root.update_idletasks()
+        thumb = [x for x in range(width) if control.slider.identify(x, y).endswith("slider")]
+        self.assertTrue(thumb)
+        x = thumb[len(thumb) // 2]
+        control.slider.event_generate("<ButtonPress-1>", x=x, y=y)
+        control.slider.event_generate("<B1-Motion>", x=x + width // 4, y=y)
+        control.slider.event_generate("<ButtonRelease-1>", x=x + width // 4, y=y)
+        self.assertGreater(control.get_value(), 100)
+        self.assertLess(control.get_value(), spec.high)
+
+    def test_slider_track_click_ignores_auto_and_disabled_controls(self):
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        changes = []
+        control = ParameterControl(self.root, spec, lambda: changes.append(True))
+        control.pack(fill="x")
+        self.root.deiconify()
+        self.root.update_idletasks()
+        control.set_value(None, 1500)
+        control.slider.event_generate("<ButtonPress-1>", x=10, y=5)
+        self.assertIsNone(control.get_value())
+        self.assertEqual(control.slider.get(), 1500)
+        control.set_value(2000, 2000)
+        control.slider.configure(state="disabled")
+        control.slider.event_generate("<ButtonPress-1>", x=10, y=5)
+        self.assertEqual(control.get_value(), 2000)
+        self.assertFalse(changes)
+
     def test_ratio_accepts_small_positive_values_and_rejects_nonfinite(self):
         spec = next(spec for spec in PARAMETERS if spec.name == "weak_threshold_ratio")
         control = ParameterControl(self.root, spec, lambda: None)
         control.set_value(0.00001, 0.00001)
         self.assertEqual(control.get_value(), 0.00001)
         for value in ("0", "1.1", "nan", "inf"):
+            control.value.set(value)
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                control.get_value()
+
+    def test_top_exclusion_control_accepts_endpoints_and_rejects_invalid_values(self):
+        spec = next(spec for spec in PARAMETERS if spec.name == "top_exclusion_ratio")
+        control = ParameterControl(self.root, spec, lambda: None)
+        for value in (0, 0.25, 0.5, 1):
+            control.set_value(value, value)
+            self.assertEqual(control.get_value(), value)
+        for value in ("-0.1", "1.1", "nan", "inf"):
             control.value.set(value)
             with self.subTest(value=value), self.assertRaises(ValueError):
                 control.get_value()

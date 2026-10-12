@@ -16,6 +16,23 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_top_exclusion_defaults_config_override_and_bounds(self):
+        parser = build_parser()
+        self.assertEqual(config_from_args(parser.parse_args([])).top_exclusion_ratio, 0.25)
+        for value in ("0", "0.6", "1"):
+            self.assertEqual(
+                config_from_args(parser.parse_args(["--top-exclusion-ratio", value])).top_exclusion_ratio,
+                float(value),
+            )
+        for value in ("-0.1", "1.1", "nan", "inf", "-inf"):
+            with self.subTest(value=value), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                parser.parse_args(["--top-exclusion-ratio", value])
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text("--top-exclusion-ratio 0.4\n", encoding="utf-8")
+            self.assertEqual(config_from_args(parse_args([str(folder)])).top_exclusion_ratio, 0.4)
+            self.assertEqual(config_from_args(parse_args([str(folder), "--top-exclusion-ratio", "0"])).top_exclusion_ratio, 0)
+
     def test_reference_and_surface_frames_are_independent(self):
         with TemporaryDirectory() as temporary_dir:
             folder = Path(temporary_dir)

@@ -251,6 +251,7 @@ alphabetically by name, ignoring leading dashes.
 | `--foreground-depth-px` | `220` | Search depth below the substrate line. |
 | `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
 | `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
+| `--top-exclusion-ratio` | `0.25` | Fraction of image height excluded from droplet detection at the top, between 0 and 1. Background and surface calibration still use the full image. |
 | `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |
 | `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
 | `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |

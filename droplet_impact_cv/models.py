@@ -16,6 +16,7 @@ DEFAULT_SURFACE_BAND_PX = 3
 DEFAULT_WEAK_REACH_PX = 40
 DEFAULT_WEAK_THRESHOLD_RATIO = 0.3
 DEFAULT_MIRROR_MIN_DEPTH_PX = 50
+DEFAULT_TOP_EXCLUSION_RATIO = 0.25
 REFLECTION_MODES = ("auto", "mirror", "none")
 
 
@@ -43,6 +44,7 @@ class AnalysisConfig:
     surface_band_px: int = DEFAULT_SURFACE_BAND_PX
     hydrophobic: bool = False
     foreground_depth_px: int = 220
+    top_exclusion_ratio: float = DEFAULT_TOP_EXCLUSION_RATIO
     min_contact_px: int = 30
     min_impact_width_px: int = 30
     include_pre_impact: bool = False

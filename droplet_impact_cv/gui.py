@@ -191,6 +191,8 @@ PARAMETERS = (
               "Image number used for both reference equivalent diameters. Choose a frame with a clearly visible drop before impact. Auto selects the first frame whose substrate clearance is at most half its volume-equivalent diameter.", True),
     Parameter("surface_calibration_frame", "Surface calibration frame", 0, 10000, 1,
               "Choose an image number after impact where the drop meets the substrate. This image sets the substrate line; changing it can move that line. Auto uses the clean background.", True),
+    Parameter("top_exclusion_ratio", "Exclude top image fraction", 0, 1, 0.01,
+              "Fraction of image height excluded from droplet detection at the top. 0 includes all rows; 1 excludes all rows. Background and surface calibration use the full image."),
     Parameter("strong_threshold", "Main drop threshold", 1, 4095, 1,
               "How different a pixel must be from the clean background to count as liquid. Lower values detect more of the drop, but may also include image noise.", True),
     Parameter("min_strong_threshold", "Min auto threshold", 1, 4095, 1,
@@ -222,7 +224,7 @@ PARAMETERS = (
 PARAMETER_GROUPS = (
     ("Experiment and scale", ("fps", "pixel_size_mm_per_px")),
     ("Substrate and width measurement", ("droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px", "mirror_min_depth_px")),
-    ("Liquid detection", ("strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
+    ("Liquid detection", ("top_exclusion_ratio", "strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
     ("Drop selection and outline cleanup", ("min_droplet_area_px2", "min_contact_px", "morphology_radius_px")),
 )
 STATUS_COLORS = {"busy": "#a66b00", "ready": "#16803c", "error": "#b42318", "idle": "#526071"}
@@ -315,6 +317,7 @@ class ParameterControl(ttk.Frame):
         self.slider_value = tk.DoubleVar(value=spec.low)
         self.slider = ttk.Scale(row, from_=spec.low, to=spec.high,
                                 variable=self.slider_value, command=self._slide)
+        self.slider.bind("<Button-1>", self._slider_press)
         self.slider.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.entry = ttk.Entry(row, textvariable=self.value, width=10)
         self.entry.pack(side="right")
@@ -356,6 +359,15 @@ class ParameterControl(ttk.Frame):
         self._state()
         self._typed()
 
+    def _slider_press(self, event):
+        if self.slider.instate(["disabled"]):
+            return "break"
+        if self.slider.identify(event.x, event.y).endswith("slider"):
+            return None
+        # Let the theme map track coordinates to values, including thumb margins.
+        self.slider.set(self.slider.get(event.x, event.y))
+        return "break"
+
     def _slide(self, value):
         if self.updating:
             return
@@ -393,7 +405,7 @@ class ParameterControl(ttk.Frame):
                 raise ValueError("Enter a positive value.")
         elif self.spec.name != "surface_angle_deg" and number < self.spec.low:
             raise ValueError(f"Enter a value >= {self.spec.low:g}.")
-        if self.spec.name == "weak_threshold_ratio" and number > 1:
+        if self.spec.name in ("weak_threshold_ratio", "top_exclusion_ratio") and number > 1:
             raise ValueError("Ratio must be <= 1.")
         if self.spec.name in ("surface_y_px", "weak_reach_px", "min_droplet_area_px2",
                               "morphology_radius_px", "surface_band_px", "foreground_depth_px",

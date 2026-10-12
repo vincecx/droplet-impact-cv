@@ -13,6 +13,7 @@ from .models import (
     DEFAULT_MIRROR_MIN_DEPTH_PX,
     DEFAULT_PIXEL_SIZE_MM_PER_PX,
     DEFAULT_SURFACE_BAND_PX,
+    DEFAULT_TOP_EXCLUSION_RATIO,
     DEFAULT_WEAK_REACH_PX,
     DEFAULT_WEAK_THRESHOLD_RATIO,
     REFLECTION_MODES,
@@ -62,6 +63,13 @@ def unit_fraction(value: str) -> float:
 
 def default_output_dir(input_dir: Path) -> Path:
     return PROJECT_DIR / "outputs" / input_dir.resolve().name
+
+
+def exclusion_ratio(value: str) -> float:
+    parsed = float(value)
+    if not 0.0 <= parsed <= 1.0:
+        raise argparse.ArgumentTypeError("value must be in the range [0, 1]")
+    return parsed
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -249,6 +257,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--top-exclusion-ratio",
+        type=exclusion_ratio,
+        default=DEFAULT_TOP_EXCLUSION_RATIO,
+        help=(
+            "Fraction of image height excluded from droplet detection at the top. "
+            "Range: 0 to 1; 0 disables exclusion, 1 excludes all rows. "
+            "Background and surface calibration use the full image. Default: 0.25"
+        ),
+    )
+    parser.add_argument(
         "--foreground-depth-px",
         dest="foreground_depth_px",
         type=nonnegative_int,
@@ -369,6 +387,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         surface_band_px=args.surface_band_px,
         hydrophobic=bool(args.hydrophobic),
         foreground_depth_px=args.foreground_depth_px,
+        top_exclusion_ratio=args.top_exclusion_ratio,
         min_contact_px=args.min_contact_px,
         min_impact_width_px=args.min_impact_width_px,
         include_pre_impact=args.include_pre_impact,

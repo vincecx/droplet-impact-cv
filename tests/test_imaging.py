@@ -72,6 +72,47 @@ class BackgroundTests(unittest.TestCase):
 
 
 class ForegroundMaskTests(unittest.TestCase):
+    def test_top_exclusion_clips_strong_weak_and_cleaned_pixels(self) -> None:
+        background = np.full((41, 40), 4000, dtype=np.float32)
+        image = background.copy()
+        image[2:8, 5:15] = 2000  # An excluded seed must not grow into weak pixels.
+        image[8:20, 5:15] = 3400
+        image[2:30, 22:35] = 2000  # A connected contour crosses the cutoff.
+        config = AnalysisConfig(input_dir=Path("input"), output_csv=Path("out.csv"))
+        original = background.copy()
+        for ratio, cutoff in ((0, 0), (0.25, 11), (0.5, 21), (1, 41)):
+            with self.subTest(ratio=ratio):
+                mask = foreground_mask(
+                    image, background, SurfaceLine(35, 0), 1500,
+                    replace(config, top_exclusion_ratio=ratio), make_structure(2),
+                    weak_threshold=500,
+                )
+                self.assertFalse(mask[:cutoff].any())
+                if ratio < 1:
+                    self.assertTrue(mask[25, 28])
+                if ratio == 0:
+                    self.assertTrue(mask[15, 10])
+                else:
+                    self.assertFalse(mask[15, 10])
+                measurement = component_measurement(
+                    mask, SurfaceLine(35, 0), replace(config, top_exclusion_ratio=ratio, min_droplet_area_px2=1)
+                )
+                self.assertFalse(measurement.mask[:cutoff].any())
+        np.testing.assert_array_equal(background, original)
+
+    def test_excluded_component_cannot_win_selection_or_fill_back_in(self) -> None:
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[:8, :] = 1
+        mask[15:25, 15:25] = 1
+        config = AnalysisConfig(input_dir=Path("input"), output_csv=Path("out.csv"), min_droplet_area_px2=1)
+        measurement = component_measurement(mask, SurfaceLine(30, 0), config)
+        self.assertEqual(measurement.area_px2, 100)
+        self.assertFalse(measurement.mask[:10].any())
+        self.assertTrue(mask[:8].all())  # The caller's mask is preserved.
+        empty = component_measurement(mask, SurfaceLine(30, 0), replace(config, top_exclusion_ratio=1))
+        self.assertEqual(empty.area_px2, 0)
+        self.assertIsNone(empty.d_eq_volume_px)
+
     def test_default_threshold_excludes_weak_shadow_attached_to_droplet(self) -> None:
         background = np.full((60, 60), 4000, dtype=np.float32)
         image = background.copy()
@@ -298,7 +339,7 @@ class ComponentMeasurementTests(unittest.TestCase):
                 config = AnalysisConfig(
                     input_dir=Path("input"), output_csv=Path("output.csv"),
                     min_droplet_area_px2=1, min_contact_px=1,
-                    hydrophobic=hydrophobic, debug_dir=None,
+                    hydrophobic=hydrophobic, debug_dir=None, top_exclusion_ratio=0,
                 )
                 measurement = component_measurement(
                     mask, SurfaceLine(70.0, angle_deg=0.0), config
@@ -321,7 +362,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         mask[20:50, 30:70] = 1
         config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, debug_dir=None,
+            min_droplet_area_px2=1, min_contact_px=1, debug_dir=None, top_exclusion_ratio=0,
         )
 
         measurement = component_measurement(mask, SurfaceLine(70.0, angle_deg=0.0), config)
