@@ -18,13 +18,18 @@ Single run  -> ``spreading_dynamics_<tag>``  (asymmetric 4-panel grid)
     b  Incoming droplet geometry (D_parallel, D_normal, D_eq,V, D_eq,A)
        — setup / initial anisotropy that defines the length scale
     c  Contact-line velocity u_cl(t)            — kinematic mechanism
-    d  Lamella morphology: projected area A/A0 and mean thickness h/D0
-       — orthogonal shape evidence
+    d  Lamella morphology: side-profile (silhouette) area A_s/A_s,0 and
+       mean thickness h/D0 = A_s/(d D0)   — orthogonal shape evidence
+       (the camera is side-looking, so the area column is the droplet
+       cross-sectional silhouette, not a top-view footprint)
 
 Multiple runs -> ``spreading_comparison``
     a  beta(t) overlay with direct labels       — cross-condition dynamics
     b  beta_max bar summary
     c  t_max bar summary
+Runs are ordered and colored by substrate temperature (cool -> warm) and
+tagged by their condition (e.g. "52.3 C #1") when run_params.json carries
+the experimental conditions; explicit --labels override this behaviour.
 
 A machine-readable ``spreading_metrics_summary.csv`` is always written.
 
@@ -71,6 +76,7 @@ import csv
 import json
 import math
 import sys
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +108,10 @@ class RunData:
     pixel_mm_per_px: float | None
     impact_frame: float | None
     surface_angle_deg: float | None
+    # experimental conditions (recorded from package 0.4.0 onward)
+    substrate: str | None = None
+    hydrophilicity: str | None = None
+    substrate_temp_deg_c: float | None = None
 
     @property
     def n_rows(self) -> int:
@@ -228,6 +238,11 @@ def load_run(path: Path) -> RunData:
         "surface_angle_deg": _to_float(
             str(params.get("surface_angle_deg", ""))
         ),
+        "substrate": (params.get("substrate") or None),
+        "hydrophilicity": (params.get("hydrophilicity") or None),
+        "substrate_temp_deg_c": _to_float(
+            str(params.get("substrate_temp_deg_c", ""))
+        ),
     }
 
     # keep only rows with a valid time axis, sort chronologically
@@ -257,6 +272,9 @@ def load_run(path: Path) -> RunData:
         pixel_mm_per_px=data["pixel_mm_per_px"],
         impact_frame=data["impact_frame"],
         surface_angle_deg=data["surface_angle_deg"],
+        substrate=data["substrate"],
+        hydrophilicity=data["hydrophilicity"],
+        substrate_temp_deg_c=data["substrate_temp_deg_c"],
     )
 
 
@@ -499,7 +517,7 @@ def add_phase_labels(ax, m: RunMetrics, win_end: float) -> None:
                 "Recoil / relaxation", **kw)
 
 
-def condition_summary(m: RunMetrics, u0: float | None,
+def condition_summary(run: RunData, m: RunMetrics, u0: float | None,
                       tilt: float | None) -> str:
     """One-line condition metadata rendered above the figure, not inside axes."""
     parts = [rf"$D_0$ = {m.d0_mm:.2f} mm"]
@@ -510,7 +528,9 @@ def condition_summary(m: RunMetrics, u0: float | None,
     if m.re is not None:
         parts.append(rf"$Re$ = {m.re:.0f}")
     if tilt is not None:
-        parts.append(rf"$\alpha$ = {tilt:g}$\degree$")
+        parts.append(rf"$\alpha$ = {tilt:.2f}$\degree$")
+    if run.substrate_temp_deg_c is not None:
+        parts.append(rf"$T_s$ = {run.substrate_temp_deg_c:g}$\degree$C")
     return "     ".join(parts)
 
 
@@ -675,36 +695,40 @@ def build_panel_velocity(ax, run: RunData, m: RunMetrics, *,
 
 def build_panel_morphology(ax, run: RunData, m: RunMetrics, *,
                            window: np.ndarray | None = None) -> None:
-    """Panel d: projected area and mean lamella thickness."""
+    """Panel d: side-profile silhouette area and mean lamella thickness."""
     w = np.ones(run.n_rows, dtype=bool) if window is None else window
     t = run.t_ms[w]
     win_end = float(t[-1])
     px = run.pixel_mm_per_px
+    d_win = run.d_spread[w]
 
+    # normalize by the silhouette area of the incoming spherical droplet
     d0_px = m.d0_mm / px if px else np.nan
     if math.isfinite(d0_px):
-        a0_px2 = math.pi / 4.0 * d0_px**2
+        a_s0_px2 = math.pi / 4.0 * d0_px**2
     else:
-        a0_px2 = float(run.area_px2[w][0])
-    a_ratio = run.area_px2[w] / a0_px2
+        a_s0_px2 = float(run.area_px2[w][0])
+    a_ratio = run.area_px2[w] / a_s0_px2
 
-    ax.plot(t, a_ratio, color=PALETTE["morph"], lw=1.5, label=r"$A/A_0$")
+    ax.plot(t, a_ratio, color=PALETTE["morph"], lw=1.5,
+            label=r"$A_s/A_{s,0}$")
     ax.fill_between(t, a_ratio, float(np.nanmin(a_ratio)),
                     color=PALETTE["morph"], alpha=0.08, lw=0)
     ax.set_xlabel("Time after impact (ms)")
-    ax.set_ylabel(r"Projected area $A/A_0$", color=PALETTE["morph"])
+    ax.set_ylabel(r"Side-profile area $A_s/A_{s,0}$",
+                  color=PALETTE["morph"])
     ax.tick_params(axis="y", colors=PALETTE["morph"])
     ax.spines["left"].set_color(PALETTE["morph"])
     ax.set_xlim(0.0, win_end * 1.03)
 
-    # mean thickness h = A_physical / d_spread; unreliable early, mask it
+    # frames with a reliable contact width (same mask used for thickness)
+    width_ok = d_win > 0.5 * m.d0_mm
+
+    # mean thickness h = silhouette area / spread width; mask early frames
     if px:
         a_mm2 = run.area_px2[w] * px**2
         with np.errstate(divide="ignore", invalid="ignore"):
-            h_mm = np.where(
-                run.d_spread[w] > 0.5 * m.d0_mm,
-                a_mm2 / run.d_spread[w], np.nan,
-            )
+            h_mm = np.where(width_ok, a_mm2 / d_win, np.nan)
         ax2 = ax.twinx()
         ax2.plot(t, h_mm / m.d0_mm, color=PALETTE["thickness"],
                  lw=1.2, ls=(0, (3, 2)), label=r"$h/D_0$")
@@ -721,11 +745,16 @@ def build_panel_morphology(ax, run: RunData, m: RunMetrics, *,
         ax.legend(lines1 + lines2, labs1 + labs2, loc="best",
                   ncol=1, handlelength=1.6, columnspacing=0.8)
 
-    i_min = int(np.nanargmin(a_ratio))
+    # max flattening = minimum silhouette area among frames that still have
+    # a measured contact width, so detection-loss frames cannot be selected
+    candidates = np.where(width_ok & np.isfinite(a_ratio))[0]
+    if candidates.size == 0:
+        candidates = np.where(np.isfinite(a_ratio))[0]
+    i_min = int(candidates[np.argmin(a_ratio[candidates])])
     ax.plot(t[i_min], a_ratio[i_min], marker="o", ms=4,
             color=PALETTE["morph"])
     ax.annotate(
-        "max flattening\n" + rf"$A/A_0={a_ratio[i_min]:.2f}$",
+        "max flattening\n" + rf"$A_s/A_{{s,0}}={a_ratio[i_min]:.2f}$",
         xy=(t[i_min], a_ratio[i_min]),
         xytext=(8, 12), textcoords="offset points", fontsize=6.6,
         arrowprops=dict(arrowstyle="-", lw=0.6,
@@ -768,7 +797,7 @@ def figure_single(run: RunData, m: RunMetrics, args,
 
     # condition metadata occupies its own line above the panels
     tilt = effective_tilt(run, args.tilt)
-    summary = condition_summary(m, args.impact_velocity, tilt)
+    summary = condition_summary(run, m, args.impact_velocity, tilt)
     fig.text(0.07, 0.955, summary, fontsize=7, ha="left", va="center")
 
     stem = f"spreading_dynamics_{_safe(run.tag)}"
@@ -778,6 +807,54 @@ def figure_single(run: RunData, m: RunMetrics, args,
 # ===========================================================================
 # 7. Comparison panel builders and figure assembly
 # ===========================================================================
+
+
+def derive_tags(runs: list[RunData]) -> list[str]:
+    """Short, condition-based display tags.
+
+    Runs carrying a substrate temperature are tagged by temperature
+    (e.g. "52.3 °C"); repeated conditions get a "#n" suffix. Runs without
+    condition metadata keep their result-folder name.
+    """
+    bases = [
+        f"{r.substrate_temp_deg_c:g} °C"
+        if r.substrate_temp_deg_c is not None
+        else r.tag
+        for r in runs
+    ]
+    counts = Counter(bases)
+    seen: Counter = Counter()
+    tags: list[str] = []
+    for base in bases:
+        seen[base] += 1
+        tags.append(f"{base} #{seen[base]}" if counts[base] > 1 else base)
+    return tags
+
+
+def condition_colors(runs: list[RunData]) -> list:
+    """Color runs by substrate temperature (cool -> warm).
+
+    Falls back to the restrained categorical sequence when any run lacks
+    temperature metadata.
+    """
+    temps = [r.substrate_temp_deg_c for r in runs]
+    if any(t is None for t in temps):
+        return [RUN_COLORS[i % len(RUN_COLORS)] for i in range(len(runs))]
+    from matplotlib.colors import LinearSegmentedColormap
+
+    cmap = LinearSegmentedColormap.from_list(
+        "temperature", ["#0F4D92", "#E08214", "#B64342"]
+    )
+    tmin, tmax = min(temps), max(temps)
+    span = max(tmax - tmin, 1e-9)
+    return [cmap((t - tmin) / span) for t in temps]
+
+
+def condition_sort_key(run: RunData):
+    """Order comparison runs by temperature, then by result-folder name."""
+    temp = run.substrate_temp_deg_c
+    return (temp if temp is not None else math.inf,
+            run.csv_path.parent.name)
 
 
 def build_panel_overlay(ax, runs: list[RunData],
@@ -854,7 +931,7 @@ def figure_comparison(runs: list[RunData], metrics: list[RunMetrics],
     ax_c = fig.add_subplot(gs[1, 4:6])
 
     tags = [r.tag for r in runs]
-    colors = [RUN_COLORS[i % len(RUN_COLORS)] for i in range(len(runs))]
+    colors = condition_colors(runs)
 
     build_panel_overlay(ax_a, runs, metrics, colors)
     build_panel_summary_bar(
@@ -883,7 +960,8 @@ def write_summary(runs: list[RunData], metrics: list[RunMetrics],
                   outdir: Path) -> Path:
     out = outdir / "spreading_metrics_summary.csv"
     columns = [
-        "tag", "n_frames", "duration_ms", "d0_mm", "d0_source",
+        "tag", "substrate", "hydrophilicity", "substrate_temp_deg_c",
+        "n_frames", "duration_ms", "d0_mm", "d0_source",
         "beta_max", "t_max_ms", "beta_final", "u_peak_m_s",
         "t_u_peak_ms", "aspect_ratio", "weber_number", "reynolds_number",
     ]
@@ -892,7 +970,10 @@ def write_summary(runs: list[RunData], metrics: list[RunMetrics],
         writer.writerow(columns)
         for run, m in zip(runs, metrics):
             writer.writerow([
-                m.tag, run.n_rows,
+                m.tag, run.substrate or "", run.hydrophilicity or "",
+                (f"{run.substrate_temp_deg_c:g}"
+                 if run.substrate_temp_deg_c is not None else ""),
+                run.n_rows,
                 f"{float(run.t_ms[-1]):.3f}",
                 f"{m.d0_mm:.4f}", m.d0_source,
                 f"{m.beta_max:.4f}", f"{m.t_max_ms:.3f}",
@@ -976,8 +1057,14 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if args.labels:
+        # explicit user labels; keep the input ordering
         for run, label in zip(runs, args.labels):
             run.tag = label
+    elif len(runs) > 1:
+        # organize the comparison by experimental condition and tag by it
+        runs.sort(key=condition_sort_key)
+        for run, tag in zip(runs, derive_tags(runs)):
+            run.tag = tag
 
     metrics: list[RunMetrics] = []
     for run in runs:
