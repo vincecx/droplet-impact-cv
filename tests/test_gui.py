@@ -5,11 +5,11 @@ import sys
 import time
 import tkinter as tk
 import unittest
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 import tifffile
@@ -19,7 +19,9 @@ from droplet_impact_cv.gui import (
     PARAMETERS, STATUS_COLORS, DropletApp, ParameterControl, PreviewSession, PreviewViewport,
     load_folder_config, resolve_output_config, save_folder_config, surface_values_from_points,
 )
-from droplet_impact_cv.cli import default_output_dir
+from droplet_impact_cv.cli import build_parser, default_output_dir
+from droplet_impact_cv.models import CONFIG_PARAMETER_ORDER, AnalysisConfig
+from droplet_impact_cv.output import run_params_payload
 from droplet_impact_cv.imaging import read_image
 
 
@@ -102,7 +104,8 @@ class PreviewTests(unittest.TestCase):
         for mode, custom, folder in choices:
             with self.subTest(mode=mode):
                 result = resolve_output_config(config, mode, custom)
-                self.assertEqual(result.output_csv, folder / "configured.csv")
+                self.assertEqual(result.output_csv, folder / "cv_output.csv")
+                self.assertEqual(result.output_dir, folder)
                 self.assertEqual(result.debug_dir, folder / "debug_overlays")
                 self.assertFalse(folder.exists())
         with self.assertRaises(ValueError):
@@ -114,6 +117,52 @@ class PreviewTests(unittest.TestCase):
         self.config_file.write_text("--HO 1\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "unrecognized arguments"):
             load_folder_config(self.folder)
+
+    def test_save_writes_all_output_options_in_shared_parameter_order(self):
+        config = load_folder_config(self.folder)
+        save_folder_config(config)
+        lines = [line for line in self.config_file.read_text(encoding="utf-8").splitlines()
+                 if line.startswith("--")]
+        self.assertEqual([line.split()[0] for line in lines[:3]],
+                         ["--output-dir", "--output-csv", "--debug-dir"])
+        self.assertEqual(list(run_params_payload(config)["parameters"]), list(CONFIG_PARAMETER_ORDER))
+        self.assertEqual(set(CONFIG_PARAMETER_ORDER), {field.name for field in fields(AnalysisConfig)})
+        option_names = {action.dest: next(option for option in action.option_strings if option.startswith("--"))
+                        for action in build_parser()._actions
+                        if action.option_strings and action.dest != "help"}
+        self.assertEqual([line.split()[0] for line in lines],
+                         [option_names[name] for name in CONFIG_PARAMETER_ORDER
+                          if name in option_names and getattr(config, name) is not None])
+        self.assertEqual(load_folder_config(self.folder), config)
+
+    def test_gui_initializes_configured_output_folder_and_preserves_legacy_paths(self):
+        original = self.config_file.read_text(encoding="utf-8")
+        for mode, output in (("custom", self.folder / "custom results"),
+                             ("automatic", default_output_dir(self.folder)),
+                             ("input", self.folder / "CV_postprocessing")):
+            with self.subTest(mode=mode):
+                self.config_file.write_text(original + f'--output-dir "{output.as_posix()}"\n', encoding="utf-8")
+                config = load_folder_config(self.folder)
+                app = SimpleNamespace(session=SimpleNamespace(base_config=config),
+                                      output_mode=Mock(), custom_output=Mock(), output_changed=Mock())
+                DropletApp._initialize_output(app)
+                app.output_mode.set.assert_called_once_with(mode)
+                app.custom_output.set.assert_called_once_with(str(output.resolve()))
+                resolved = resolve_output_config(config, mode, str(output))
+                self.assertEqual(resolved.output_csv, output / "cv_output.csv")
+                self.assertEqual(resolved.output_dir, output)
+        legacy = self.folder / "legacy" / "result.csv"
+        debug = self.folder / "separate png"
+        self.config_file.write_text(original + f'--output-csv "{legacy.as_posix()}"\n'
+                                    f'--debug-dir "{debug.as_posix()}"\n', encoding="utf-8")
+        config = load_folder_config(self.folder)
+        app = SimpleNamespace(session=SimpleNamespace(base_config=config),
+                              output_mode=Mock(), custom_output=Mock(), output_changed=Mock())
+        DropletApp._initialize_output(app)
+        app.output_mode.set.assert_called_once_with("custom")
+        resolved = resolve_output_config(config, "custom", str(legacy.parent))
+        self.assertEqual(resolved.output_csv, legacy)
+        self.assertEqual(resolved.debug_dir, debug)
 
     def test_save_round_trip_preserves_auto_paths_flags_and_frame_range(self):
         config = replace(
@@ -603,8 +652,10 @@ class GuiWorkflowTests(unittest.TestCase):
             pump(lambda: app.preview_ready)
             self.assertIsNone(app.batch_config().droplet_size_ref_frame)
             self.assertEqual(len(app.photos), 2)
-            self.assertEqual(app.output_mode.get(), "input")
-            self.assertEqual(app.batch_config().debug_dir, self.folder / "CV_postprocessing" / "debug_overlays")
+            self.assertEqual(app.output_mode.get(), "custom")
+            self.assertEqual(app.batch_config().output_dir, self.folder)
+            self.assertEqual(app.batch_config().output_csv, output)
+            self.assertEqual(app.batch_config().debug_dir, debug)
             app.output_mode.set("automatic")
             app.output_changed()
             self.assertEqual(app.batch_config().output_csv.parent, default_output_dir(self.folder))
@@ -631,7 +682,8 @@ class GuiWorkflowTests(unittest.TestCase):
             app.process_all()
             pump(lambda: app.status.get().startswith("Complete."))
         selected_output = self.folder / "CV_postprocessing"
-        self.assertTrue((selected_output / "result.csv").exists())
+        self.assertTrue((selected_output / "cv_output.csv").exists())
+        self.assertTrue((selected_output / "run_params.json").is_file())
         self.assertEqual(len(list((selected_output / "debug_overlays").glob("*.png"))), 5)
         self.assertFalse(output.exists())
         self.assertFalse(debug.exists())

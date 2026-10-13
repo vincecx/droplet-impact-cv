@@ -22,7 +22,7 @@ from .analysis import (
 )
 from .cli import CONFIG_FILENAME, build_parser, config_from_args, default_output_dir, parse_args
 from .imaging import frame_number_from_filename, read_image
-from .models import AnalysisConfig
+from .models import CONFIG_PARAMETER_ORDER, OUTPUT_CSV_FILENAME, AnalysisConfig
 from .output import RUN_PARAMS_FILENAME, write_csv, write_run_params
 from .visualization import render_debug_overlay
 
@@ -44,10 +44,14 @@ def load_folder_config(folder: Path) -> AnalysisConfig:
 def save_folder_config(config: AnalysisConfig, backup: bool = False) -> Path:
     """Write reloadable CLI settings, preserving Auto by omitting None values."""
     lines = ["# Droplet Impact CV analysis settings"]
-    for action in build_parser()._actions:
-        if not action.option_strings or action.dest == "help":
+    actions = {action.dest: action for action in build_parser()._actions if action.option_strings}
+    for name in CONFIG_PARAMETER_ORDER:
+        action = actions.get(name)
+        if action is None:
             continue
         value = getattr(config, action.dest)
+        if action.dest == "output_dir" and value is None:
+            value = config.output_csv.parent
         if value is None:
             continue
         option = next(option for option in action.option_strings if option.startswith("--"))
@@ -101,8 +105,11 @@ def resolve_output_config(
         raise ValueError("Select a valid output location.")
     if folder.exists() and not folder.is_dir():
         raise ValueError("The output folder must be a directory.")
+    if mode == "custom" and folder == (config.output_dir or config.output_csv.parent).resolve():
+        # Preserve legacy per-file overrides when opening a configured folder.
+        return replace(config, output_dir=folder)
     return replace(
-        config, output_csv=folder / config.output_csv.name,
+        config, output_dir=folder, output_csv=folder / OUTPUT_CSV_FILENAME,
         debug_dir=folder / "debug_overlays",
     )
 
@@ -808,7 +815,8 @@ class DropletApp:
                 self.session.base_config, self.output_mode.get(), self.custom_output.get(),
             )
             self.output_summary.set(
-                f"CSV: {config.output_csv} | Debug overlays: {config.debug_dir}"
+                f"CSV: {config.output_csv} | Run parameters: {config.output_dir / RUN_PARAMS_FILENAME} | "
+                f"Debug overlays: {config.debug_dir}"
             )
             if self.preview_ready:
                 self.batch_config()
@@ -828,8 +836,18 @@ class DropletApp:
 
     def _initialize_output(self):
         config = self.session.base_config
-        folder = config.output_csv.parent.resolve()
-        self.output_mode.set("input")
+        folder = (config.output_dir or config.output_csv.parent).resolve()
+        args = parse_args([str(config.input_dir)])
+        configured = any(getattr(args, name) is not None for name in ("output_dir", "output_csv", "debug_dir"))
+        standard = (config.output_csv.resolve() == folder / OUTPUT_CSV_FILENAME
+                    and config.debug_dir is not None
+                    and config.debug_dir.resolve() == folder / "debug_overlays")
+        mode = "input"
+        if configured:
+            mode = ("input" if standard and folder == config.input_dir.resolve() / "CV_postprocessing"
+                    else "automatic" if standard and folder == default_output_dir(config.input_dir).resolve()
+                    else "custom")
+        self.output_mode.set(mode)
         self.custom_output.set(str(folder))
         self.output_changed()
 
@@ -1112,7 +1130,7 @@ class DropletApp:
             if self.closed.is_set():
                 raise RuntimeError("Operation cancelled.")
             write_csv(config.output_csv, measurements)
-            write_run_params(config.output_csv.parent / RUN_PARAMS_FILENAME, config)
+            write_run_params(config.output_dir / RUN_PARAMS_FILENAME, config)
             return len(measurements), config.output_csv
 
         self._submit("processed", generation, run)

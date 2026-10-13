@@ -9,14 +9,16 @@ from pathlib import Path
 from typing import Iterable
 
 from . import __version__
-from .models import AnalysisConfig, FrameMeasurement
+from .models import CONFIG_PARAMETER_ORDER, AnalysisConfig, FrameMeasurement
 
 RUN_PARAMS_FILENAME = "run_params.json"
 
 
 def run_params_payload(config: AnalysisConfig) -> dict:
     """Serialize the effective runtime configuration to JSON-safe data."""
-    parameters = asdict(config)
+    values = asdict(config)
+    values["output_dir"] = config.output_dir or config.output_csv.parent
+    parameters = {name: values[name] for name in CONFIG_PARAMETER_ORDER}
     for key, value in list(parameters.items()):
         if isinstance(value, Path):
             parameters[key] = str(value)

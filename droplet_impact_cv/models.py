@@ -18,6 +18,23 @@ DEFAULT_WEAK_THRESHOLD_RATIO = 0.3
 DEFAULT_MIRROR_MIN_DEPTH_PX = 50
 DEFAULT_TOP_EXCLUSION_RATIO = 0.25
 REFLECTION_MODES = ("auto", "mirror", "none")
+OUTPUT_CSV_FILENAME = "cv_output.csv"
+
+# Shared serialization order: locations, experiment, range, substrate,
+# segmentation, measurement, and diagnostics.
+CONFIG_PARAMETER_ORDER = (
+    "input_dir", "output_dir", "output_csv", "debug_dir",
+    "substrate", "hydrophilicity", "substrate_temp_deg_c",
+    "fps", "pixel_size_mm_per_px", "start_frame", "end_frame",
+    "droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px",
+    "surface_angle_deg", "reflection_mode", "mirror_min_depth_px",
+    "surface_search_start_px", "surface_drop_delta",
+    "top_exclusion_ratio", "strong_threshold", "weak_threshold",
+    "min_strong_threshold", "weak_threshold_ratio", "weak_reach_px",
+    "min_droplet_area_px2", "morphology_radius_px", "foreground_depth_px",
+    "surface_band_px", "rim_to_rim", "min_contact_px", "min_impact_width_px",
+    "include_pre_impact", "time_zero", "debug_interval",
+)
 
 
 @dataclass(frozen=True)
@@ -57,6 +74,7 @@ class AnalysisConfig:
     substrate: str | None = None
     hydrophilicity: str | None = None
     substrate_temp_deg_c: float | None = None
+    output_dir: Path | None = None
 
 
 @dataclass(frozen=True)

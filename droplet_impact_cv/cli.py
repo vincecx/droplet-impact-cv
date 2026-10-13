@@ -17,6 +17,7 @@ from .models import (
     DEFAULT_WEAK_REACH_PX,
     DEFAULT_WEAK_THRESHOLD_RATIO,
     REFLECTION_MODES,
+    OUTPUT_CSV_FILENAME,
     AnalysisConfig,
 )
 from .output import RUN_PARAMS_FILENAME, write_csv, write_run_params
@@ -90,12 +91,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-o",
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Output folder for cv_output.csv, run_params.json, and debug_overlays/. "
+             "Default: <project-dir>/outputs/<input-folder>",
+    )
+    parser.add_argument(
         "--output-csv",
         dest="output_csv",
         type=Path,
         metavar="PATH",
         default=None,
-        help="Output CSV path. Default: <project-dir>/outputs/<input-folder>/spreading_diameter.csv",
+        help="Legacy CSV path override; takes precedence over --output-dir. "
+             "Default: <output-dir>/cv_output.csv",
     )
     parser.add_argument(
         "--substrate",
@@ -338,7 +347,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug-dir",
         type=Path,
         default=None,
-        help="Directory for overlay PNG diagnostics. Default: <project-dir>/outputs/<input-folder>/debug_overlays",
+        help="Legacy overlay folder override; takes precedence over --output-dir. "
+             "Default: <output-dir>/debug_overlays",
     )
     parser.add_argument(
         "--debug-interval",
@@ -382,10 +392,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
-    output_dir = default_output_dir(args.input_dir)
+    output_dir = (args.output_dir or (args.output_csv.parent if args.output_csv else None)
+                  or (args.debug_dir.parent if args.debug_dir else None)
+                  or default_output_dir(args.input_dir))
     return AnalysisConfig(
         input_dir=args.input_dir,
-        output_csv=args.output_csv or output_dir / "spreading_diameter.csv",
+        output_dir=output_dir,
+        output_csv=args.output_csv or output_dir / OUTPUT_CSV_FILENAME,
         fps=args.fps,
         pixel_size_mm_per_px=args.pixel_size_mm_per_px,
         surface_y_px=args.surface_y_px,
@@ -424,7 +437,7 @@ def main(argv: list[str] | None = None) -> None:
     config = config_from_args(args)
     measurements = analyze_sequence(config)
     write_csv(config.output_csv, measurements)
-    write_run_params(config.output_csv.parent / RUN_PARAMS_FILENAME, config)
+    write_run_params(config.output_dir / RUN_PARAMS_FILENAME, config)
 
     impact_frame = measurements[0].impact_frame if measurements else None
     valid = [row for row in measurements if not math.isnan(row.d_spread_mm)]

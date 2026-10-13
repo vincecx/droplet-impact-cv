@@ -195,9 +195,17 @@ finds no reference, those columns are empty.
 
 ## Outputs
 
+Each run writes measurement results, analysis settings, and diagnostic images:
+
+| File / directory | Contents |
+| --- | --- |
+| `cv_output.csv` | Per-frame measurements and reference droplet dimensions. |
+| `run_params.json` | Runtime settings and package version. |
+| `debug_overlays/` | Frame images with detected outlines and measured diameters. |
+
 ### Output locations
 
-The default CSV filename is `spreading_diameter.csv`.
+Use `--output-dir` (or `-o`) to select the output folder.
 
 | Mode / GUI output choice | Output folder |
 | --- | --- |
@@ -205,14 +213,14 @@ The default CSV filename is `spreading_diameter.csv`.
 | GUI: Input folder (default) | `<input-folder>/CV_postprocessing/` |
 | GUI: Custom folder | Selected directory |
 
-`<project-dir>` is the directory containing `pyproject.toml`; the automatic
-default does not depend on the input location or current working directory.
-CLI output paths can be overridden with `--output-csv` and `--debug-dir`.
+`<project-dir>` contains `pyproject.toml`. The GUI selects the location configured
+in `cv_config.txt`, defaulting to the input-folder choice when no output paths
+are configured.
 
-GUI output selection overrides configured output paths, preserves the configured
-CSV filename, and puts overlays in `<output-folder>/debug_overlays/`. For example,
-the input-folder choice for `sourcedata/example` writes to
-`sourcedata/example/CV_postprocessing/`.
+`--output-csv` and `--debug-dir` override the CSV and overlay paths individually.
+Without `--output-dir`, the CSV path's parent determines the output folder,
+followed by the debug folder's parent if only `--debug-dir` is set.
+`run_params.json` is saved in the output folder.
 
 ### Diagnostic overlays
 
@@ -223,10 +231,9 @@ overlay PNGs from the target debug directory.
 
 ### CSV columns and naming
 
-Python and CSV names use lowercase snake_case; CLI names use corresponding
-hyphens. `d` means diameter, `eq` means equivalent, and `ref_` marks quantities
-frozen at the size reference frame. Unit suffixes are `_px`, `_mm`, `_ms`, `_deg`,
-and `_px2` for area. Pixel size uses `_mm_per_px`; `fps` is the camera frame rate.
+Column names use lowercase snake_case. `d` means diameter, `eq` means equivalent,
+and `ref_` marks quantities frozen at the size reference frame. Suffixes indicate
+units: `_px`, `_mm`, `_ms`, and `_px2` for area.
 
 | Columns | Meaning |
 | --- | --- |
@@ -313,9 +320,10 @@ alphabetically by name, ignoring leading dashes.
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `--debug-dir` | `<project-dir>/outputs/<input-folder-name>/debug_overlays` | Diagnostic overlay directory. |
+| `--output-dir`, `-o` | `<project-dir>/outputs/<input-folder-name>` | Folder containing `cv_output.csv`, `run_params.json`, and `debug_overlays/`. |
+| `--output-csv` | `<output-dir>/cv_output.csv` | Override the CSV path. |
+| `--debug-dir` | `<output-dir>/debug_overlays` | Override the diagnostic folder. |
 | `--debug-interval` | `1` | Write one debug overlay every N frames. |
-| `--output-csv`, `-o` | `<project-dir>/outputs/<input-folder-name>/spreading_diameter.csv` | CSV output path. |
 
 ## Development
 

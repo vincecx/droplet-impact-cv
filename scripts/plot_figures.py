@@ -4,7 +4,7 @@ plot_figures.py — Publication-quality result figures for droplet-impact
 spreading measurements.
 
 Standalone script (independent of the droplet_impact_cv analysis workflow).
-It reads one or more ``spreading_diameter.csv`` result files produced by the
+It reads one or more ``cv_output.csv`` result files produced by the
 image-analysis pipeline and renders Nature-style multi-panel figures organized
 by physical meaning rather than one plot per variable.
 
@@ -36,13 +36,17 @@ metrics and the summary table still refer to the complete CSV.
 
 Inputs
 ------
-Measurements are taken from the current ``spreading_diameter.csv``: time
+Measurements are taken from the current ``cv_output.csv``: time
 (time_ms), frame rate (fps), image scale, diameters, impact frame and
 component area are read directly from the CSV (or computed from CSV columns);
 the script never reads cv_config.txt from the input folder. A
 ``run_params.json`` in the same result folder supplies settings that are not
 stored in the CSV (e.g. the configured surface angle) and is used when
 present.
+
+An output folder from ``--output-dir`` can be supplied directly; it resolves to
+``cv_output.csv`` in that folder. Only the current CSV columns and run parameter
+format are accepted. Explicit custom CSV paths remain usable.
 
 Adding figures
 --------------
@@ -53,9 +57,10 @@ wired into a panel builder — no figure-assembly changes are required.
 
 Examples
 --------
-  uv run python scripts/plot_figures.py outputs/example_tilted_droplet/spreading_diameter.csv
-  uv run python scripts/plot_figures.py outputs/run_a/spreading_diameter.csv \
-      outputs/run_b/spreading_diameter.csv --labels "We=50" "We=150" \
+  uv run python scripts/plot_figures.py outputs/example_tilted_droplet
+  uv run python scripts/plot_figures.py outputs/example_tilted_droplet/cv_output.csv
+  uv run python scripts/plot_figures.py outputs/run_a/cv_output.csv \
+      outputs/run_b/cv_output.csv --labels "We=50" "We=150" \
       --impact-velocity 1.42 --density 998 --surface-tension 0.072 \
       --viscosity 0.001 --tilt 30
 """
@@ -128,7 +133,25 @@ class RunMetrics:
 # ===========================================================================
 
 RUN_PARAMS_FILENAME = "run_params.json"
-REQUIRED_COLUMNS = ("time_ms", "d_spread_mm")
+OUTPUT_CSV_FILENAME = "cv_output.csv"
+REQUIRED_COLUMNS = (
+    "filename", "frame_number", "time_ms", "d_spread_px", "d_spread_mm",
+    "d_contact_px", "d_contact_mm", "d_rim_px", "d_rim_mm",
+    "droplet_size_ref_frame", "ref_d_eq_volume_px", "ref_d_eq_volume_mm",
+    "ref_d_eq_area_px", "ref_d_eq_area_mm", "ref_d_parallel_px", "ref_d_parallel_mm",
+    "ref_d_normal_px", "ref_d_normal_mm", "ref_clearance_px", "ref_clearance_mm",
+    "impact_frame", "surface_y_px", "droplet_area_px2", "fps",
+    "pixel_size_mm_per_px", "surface_calibration_frame",
+)
+
+
+def result_csv_path(path: Path) -> Path:
+    """Accept a current output folder or an explicit CSV path override."""
+    if path.is_dir():
+        return path / OUTPUT_CSV_FILENAME
+    if path.name == "spreading_diameter.csv":
+        raise ValueError("spreading_diameter.csv is no longer supported; regenerate cv_output.csv.")
+    return path
 
 
 def _to_float(value: str | None) -> float | None:
@@ -145,6 +168,7 @@ def _to_float(value: str | None) -> float | None:
 
 def load_run(path: Path) -> RunData:
     """Parse a current-format spreading CSV; run_params.json is optional."""
+    path = result_csv_path(path)
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh)
         headers = reader.fieldnames or []
@@ -158,8 +182,6 @@ def load_run(path: Path) -> RunData:
         rows = list(reader)
 
     def column(name: str) -> np.ndarray:
-        if name not in headers:
-            return np.full(len(rows), np.nan)
         values = [_to_float(r.get(name)) for r in rows]
         return np.array(
             [np.nan if v is None else v for v in values], dtype=float
@@ -177,9 +199,12 @@ def load_run(path: Path) -> RunData:
     params_path = path.parent / RUN_PARAMS_FILENAME
     if params_path.is_file():
         try:
-            params = json.loads(
-                params_path.read_text(encoding="utf-8")
-            ).get("parameters", {})
+            payload = json.loads(params_path.read_text(encoding="utf-8"))
+            params = payload.get("parameters", {}) if isinstance(payload, dict) else {}
+            if not isinstance(params, dict) or any(
+                name not in params for name in ("output_dir", "output_csv", "debug_dir")
+            ):
+                raise ValueError(f"{params_path} is not a current-format run parameters file; regenerate the results.")
         except (OSError, json.JSONDecodeError) as error:
             raise ValueError(f"cannot read {params_path}: {error}") from None
 
@@ -893,11 +918,11 @@ def _safe(tag: str) -> str:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Render publication-quality figures from "
-                    "spreading_diameter.csv result files.",
+                    "cv_output.csv result files.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("csvs", nargs="+", type=Path,
-                        help="One or more spreading_diameter.csv files")
+                        help="One or more output folders or cv_output.csv files")
     parser.add_argument("-o", "--output-dir", type=Path, default=None,
                         help="Figure output directory "
                              "(default: <csv parent>/figures)")
@@ -924,6 +949,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    try:
+        args.csvs = [result_csv_path(path) for path in args.csvs]
+    except ValueError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
     args.formats = [
         f.strip().lower() for f in args.formats.split(",") if f.strip()
     ]

@@ -17,6 +17,70 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_short_output_option_selects_directory_in_cli_and_folder_config(self):
+        # A CSV-looking argument is still a directory; -o has no CSV alias.
+        config = config_from_args(build_parser().parse_args(["-o", "results.csv"]))
+        self.assertEqual(config.output_dir, Path("results.csv"))
+        self.assertEqual(config.output_csv, Path("results.csv/cv_output.csv"))
+        self.assertEqual(config.debug_dir, Path("results.csv/debug_overlays"))
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text('-o "saved folder"\n', encoding="utf-8")
+            saved = config_from_args(parse_args([str(folder)]))
+            self.assertEqual(saved.output_dir, Path("saved folder"))
+            overridden = config_from_args(parse_args([
+                str(folder), "-o", "cli folder", "--output-csv", "custom.csv",
+            ]))
+            self.assertEqual(overridden.output_dir, Path("cli folder"))
+            self.assertEqual(overridden.output_csv, Path("custom.csv"))
+
+    def test_output_dir_layout_and_legacy_override_precedence(self):
+        parser = build_parser()
+        folder = Path("new output")
+        config = config_from_args(parser.parse_args(["--output-dir", str(folder)]))
+        self.assertEqual(config.output_dir, folder)
+        self.assertEqual(config.output_csv, folder / "cv_output.csv")
+        self.assertEqual(config.debug_dir, folder / "debug_overlays")
+        for tokens in (["--output-dir", str(folder), "--output-csv", "other/custom.csv", "--debug-dir", "other/png"],
+                       ["--debug-dir", "other/png", "--output-csv", "other/custom.csv", "--output-dir", str(folder)]):
+            config = config_from_args(parser.parse_args(tokens))
+            self.assertEqual(config.output_dir, folder)
+            self.assertEqual(config.output_csv, Path("other/custom.csv"))
+            self.assertEqual(config.debug_dir, Path("other/png"))
+
+    def test_folder_output_options_and_cli_override_precedence(self):
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text(
+                '--output-dir "saved folder"\n--output-csv "legacy/custom.csv"\n'
+                '--debug-dir "legacy/png"\n', encoding="utf-8",
+            )
+            config = config_from_args(parse_args([str(folder), "--output-dir", "cli folder"]))
+            self.assertEqual(config.output_dir, Path("cli folder"))
+            self.assertEqual(config.output_csv, Path("legacy/custom.csv"))
+            self.assertEqual(config.debug_dir, Path("legacy/png"))
+            config = config_from_args(parse_args([str(folder), "--output-csv", "cli/custom.csv"]))
+            self.assertEqual(config.output_dir, Path("saved folder"))
+            self.assertEqual(config.output_csv, Path("cli/custom.csv"))
+
+    def test_output_dir_writes_fixed_csv_and_run_params_even_with_legacy_override(self):
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            output = folder / "results"
+            csv = folder / "legacy" / "custom.csv"
+            with patch("droplet_impact_cv.cli.analyze_sequence", return_value=[]), redirect_stdout(StringIO()):
+                main([str(folder), "--output-dir", str(output)])
+            self.assertTrue((output / "cv_output.csv").is_file())
+            self.assertFalse((output / "spreading_diameter.csv").exists())
+            with patch("droplet_impact_cv.cli.analyze_sequence", return_value=[]), redirect_stdout(StringIO()):
+                main([str(folder), "--output-dir", str(output), "--output-csv", str(csv)])
+            self.assertTrue(csv.is_file())
+            self.assertFalse((csv.parent / "run_params.json").exists())
+            params = json.loads((output / "run_params.json").read_text(encoding="utf-8"))["parameters"]
+            self.assertEqual(params["output_dir"], str(output))
+            self.assertEqual(params["output_csv"], str(csv))
+            self.assertEqual(params["debug_dir"], str(output / "debug_overlays"))
+
     def test_spaced_unicode_folder_metadata_cli_override_and_json_output(self):
         with TemporaryDirectory() as temporary_dir:
             folder = Path(temporary_dir) / "2026.9.14 Al-60-5-SHO 最低高度 常温3"
@@ -201,7 +265,7 @@ class CliConfigTests(unittest.TestCase):
         args = build_parser().parse_args(["sourcedata/example"])
         config = config_from_args(args)
 
-        self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/example/spreading_diameter.csv")
+        self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/example/cv_output.csv")
         self.assertEqual(config.debug_dir, PROJECT_DIR / "outputs/example/debug_overlays")
 
     def test_default_output_is_fixed_to_project_for_external_input_and_other_cwd(self) -> None:
@@ -214,7 +278,7 @@ class CliConfigTests(unittest.TestCase):
                 os.chdir(temporary_dir)
                 config = config_from_args(build_parser().parse_args([str(folder)]))
                 self.assertEqual(default_output_dir(folder), PROJECT_DIR / "outputs/external-input")
-                self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/external-input/spreading_diameter.csv")
+                self.assertEqual(config.output_csv, PROJECT_DIR / "outputs/external-input/cv_output.csv")
                 self.assertEqual(config.debug_dir, PROJECT_DIR / "outputs/external-input/debug_overlays")
                 self.assertTrue(config.output_csv.is_absolute())
             finally:
