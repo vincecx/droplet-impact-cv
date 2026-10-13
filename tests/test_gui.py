@@ -187,6 +187,25 @@ class PreviewTests(unittest.TestCase):
             "frame000001.tif", "frame000002.tif", "frame000003.tif", "frame000004.tif",
         ])
 
+    def test_manual_recalibration_refreshes_reference_and_matches_batch(self):
+        session = PreviewSession.open(self.folder)
+        overrides = {"surface_y_px": 60, "surface_angle_deg": 0,
+                     "strong_threshold": None, "weak_threshold": None,
+                     "min_strong_threshold": 1000}
+        session.preview(4, overrides, recalibrate=True)
+        rows = analyze_sequence(replace(session.base_config, **overrides, debug_dir=None))
+        self.assertEqual(session.droplet_size_ref_frame, rows[0].droplet_size_ref_frame)
+        self.assertNotEqual(session.droplet_size_ref_frame, 4)
+        expected = prepare_sequence(replace(session.base_config, **overrides))
+        self.assertEqual(session.prepared.threshold, expected.threshold)
+        self.assertEqual(session.prepared.weak_threshold, expected.weak_threshold)
+        # Confirming the same line must also rerun automatic discovery.
+        session.droplet_size_ref_frame = 999
+        with patch("droplet_impact_cv.gui.prepare_sequence", wraps=prepare_sequence) as prepare:
+            session.preview(4, overrides, recalibrate=True)
+        prepare.assert_called_once()
+        self.assertEqual(session.droplet_size_ref_frame, rows[0].droplet_size_ref_frame)
+
     def test_explicit_reference_bypasses_auto_clearance_in_preview_and_batch(self):
         with self.config_file.open("a", encoding="utf-8") as handle:
             handle.write("--droplet-size-ref-frame 2\n")
@@ -469,7 +488,9 @@ class GuiWorkflowTests(unittest.TestCase):
 
         def pump():
             deadline = time.monotonic() + 10
-            while not app.preview_ready:
+            while (not app.preview_ready if not app.selecting_surface else
+                   app.pending is not None or app.preview_future is None or not app.preview_future.done()
+                   or app.displayed_frame_index != round(app.frame_slider.get())):
                 root.update()
                 if time.monotonic() > deadline:
                     self.fail(app.status.get())
@@ -487,6 +508,7 @@ class GuiWorkflowTests(unittest.TestCase):
             app.choose_folder()
         pump()
         app.start_surface_selection()
+        pump()
         click(20, 70)
         app.navigate_frame("last")
         self.assertEqual(app.surface_points, [])
@@ -498,7 +520,9 @@ class GuiWorkflowTests(unittest.TestCase):
         click(100, 78)
         self.assertEqual(len(app.preview_labels[0].find_all()), 4)  # Image, line, two points.
         self.assertEqual(str(app.process["state"]), "disabled")
-        app.confirm_surface_selection()
+        with patch("droplet_impact_cv.gui.messagebox.askyesno", return_value=True) as prompt:
+            app.confirm_surface_selection()
+        prompt.assert_called_once()
         self.assertEqual(app.controls["surface_calibration_frame"].get_value(), 5)
         self.assertEqual(app.controls["surface_y_px"].get_value(), 75)
         self.assertAlmostEqual(float(app.controls["surface_angle_deg"].value.get()), np.degrees(np.arctan(0.1)))
@@ -510,6 +534,31 @@ class GuiWorkflowTests(unittest.TestCase):
         self.assertEqual(float(app.controls["surface_angle_deg"].value.get()), app.session.prepared.surface_line.angle_deg)
         app.reset_image_size(0)
         self.assertEqual(app.viewports[0], PreviewViewport())
+
+        # A validation error clears preview_ready, but raw frames remain selectable.
+        app.controls["surface_calibration_frame"].set_value(999, 999, remember=False)
+        app.controls["surface_y_px"].set_value(None, 75, remember=False)
+        app.schedule_preview()
+        self.assertFalse(app.preview_ready)
+        self.assertTrue(app.status.get().startswith("Error:"))
+        app.start_surface_selection()
+        app.navigate_frame(-1)
+        pump()
+        click(20, 70)
+        click(100, 78)
+        self.assertEqual(len(app.surface_points), 2)
+        self.assertEqual(str(app.surface_confirm["state"]), "normal")
+        with patch("droplet_impact_cv.gui.messagebox.askyesno", return_value=False) as prompt:
+            app.confirm_surface_selection()
+        prompt.assert_called_once()
+        self.assertEqual(app.controls["surface_calibration_frame"].get_value(), 4)
+        self.assertEqual(app.controls["surface_y_px"].get_value(), 75)
+        self.assertAlmostEqual(app.controls["surface_angle_deg"].get_value(), np.degrees(np.arctan(0.1)))
+        for name in ("surface_calibration_frame", "surface_y_px", "surface_angle_deg"):
+            self.assertFalse(app.controls[name].auto.get())
+        pump()
+        self.assertEqual(app.controls["droplet_size_ref_frame"].get_value(), None)
+        self.assertEqual(int(app.controls["droplet_size_ref_frame"].value.get()), app.session.droplet_size_ref_frame)
 
     def test_load_preview_scrub_edit_reset_and_process(self):
         PreviewTests.setUp(self)

@@ -136,14 +136,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--fps",
         type=positive_float,
         default=DEFAULT_FPS,
-        help="Camera frame rate in fps. Default: 8000",
+        help="Camera frame rate in fps. Default: 1000",
     )
     parser.add_argument(
         "--pixel-size-mm-per-px",
         dest="pixel_size_mm_per_px",
         type=positive_float,
         default=DEFAULT_PIXEL_SIZE_MM_PER_PX,
-        help="Pixel size in mm/px. Default: 0.00711883341",
+        help="Pixel size in mm/px. Default: 0.01",
     )
     parser.add_argument(
         "--surface-y-px",
@@ -189,7 +189,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Override surface angle in clockwise deg. By default the angle is "
-            "detected from --surface-calibration-frame, or -0.6 when no calibration frame is given."
+            "detected from --surface-calibration-frame, or 0 when no calibration frame is given."
         ),
     )
     parser.add_argument(
@@ -270,7 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SURFACE_BAND_PX,
         help=(
             "Half-height in px of the band around the surface line within "
-            "which the spreading width is measured. Default: 3"
+            "which the spreading width is measured. Default: 1"
         ),
     )
     parser.add_argument(

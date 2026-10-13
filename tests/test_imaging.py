@@ -442,6 +442,7 @@ class ComponentMeasurementTests(unittest.TestCase):
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
             reflection_mode="none",
+            surface_band_px=3,
             min_droplet_area_px2=1,
             min_contact_px=1,
             debug_dir=None,

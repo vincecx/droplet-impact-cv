@@ -59,7 +59,7 @@ class SequenceAnalysisTests(unittest.TestCase):
             measurements = analyze_sequence(config)
 
         self.assertEqual([row.frame_number for row in measurements], [5, 6, 8])
-        self.assertEqual([row.time_ms for row in measurements], [0.0, 0.125, 0.375])
+        self.assertEqual([row.time_ms for row in measurements], [0.0, 1.0, 3.0])
 
     def test_frame_range_uses_filename_frame_number(self) -> None:
         with TemporaryDirectory() as temporary_dir:

@@ -77,8 +77,11 @@ The substrate parameter group contains two independent frame controls:
 
 **Select surface line manually** lets you select two points in the
 **Before Processing** preview and confirm the line. This updates the surface
-calibration frame, surface center y, and surface tilt. Auto checkboxes retain
-their state, so values with Auto enabled can subsequently be recalculated.
+calibration frame and surface center y, turning off Auto for both. If surface
+tilt is on Auto, a dialog lets you keep automatic tilt detection or turn off
+Auto and use the selected line's tilt. Confirming reruns automatic calibration,
+threshold calculation, and droplet size reference discovery, updating the Auto
+values. Selection uses raw frames and remains available after preview errors.
 
 ### Save and reset settings
 
@@ -156,12 +159,12 @@ frame and `--reflection-mode` determine how that line is found:
 | `auto` | Selects `mirror` only with strong reflection evidence; assumes `mirror` when no surface calibration frame is supplied. |
 
 `--surface-y-px` overrides the line's center position. Surface angles are
-clockwise; without calibration or an explicit angle, the fallback is `-0.6` deg.
+clockwise; without calibration or an explicit angle, the fallback is `0` deg.
 
 ### Spreading diameter, impact, and time
 
 `d_spread` is the outermost liquid span within the substrate band
-(`--surface-band-px`, default 3 px); it is zero when the drop is clear of that
+(`--surface-band-px`, default 1 px); it is zero when the drop is clear of that
 band. With `--rim-to-rim 1`, it is the full rim-to-rim width instead.
 
 Impact is always detected from contact-line width reaching
@@ -251,8 +254,8 @@ alphabetically by name, ignoring leading dashes.
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `--fps` | `8000` | Camera frame rate used to calculate `time_ms`. |
-| `--pixel-size-mm-per-px` | `0.00711883341` | Physical length represented by one pixel. |
+| `--fps` | `1000` | Camera frame rate used to calculate `time_ms`. |
+| `--pixel-size-mm-per-px` | `0.01` | Physical length represented by one pixel. |
 
 ### Substrate and width measurement
 
@@ -265,8 +268,8 @@ alphabetically by name, ignoring leading dashes.
 | `--substrate_temp_deg_c` | `None` | Surface temperature in degrees Celsius; experiment metadata only. |
 | `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
-| `--surface-angle-deg` | detected or `-0.6` | Manually override the clockwise surface angle. |
-| `--surface-band-px` | `3` | Half-height of the band in which spreading width is measured. |
+| `--surface-angle-deg` | detected or `0` | Manually override the clockwise surface angle. |
+| `--surface-band-px` | `1` | Half-height of the band in which spreading width is measured. |
 | `--surface-calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
 

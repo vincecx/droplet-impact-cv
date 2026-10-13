@@ -191,8 +191,10 @@ class CliConfigTests(unittest.TestCase):
         with TemporaryDirectory() as temporary_dir:
             config = config_from_args(parse_args([temporary_dir]))
 
-        self.assertEqual(config.fps, 8000.0)
+        self.assertEqual(config.fps, 1000.0)
         self.assertEqual(config.pixel_size_mm_per_px, DEFAULT_PIXEL_SIZE_MM_PER_PX)
+        self.assertEqual(config.pixel_size_mm_per_px, 0.01)
+        self.assertEqual(config.surface_band_px, 1)
         self.assertFalse(config.include_pre_impact)
 
     def test_input_specific_default_output_paths(self) -> None:

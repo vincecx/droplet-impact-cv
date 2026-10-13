@@ -21,7 +21,7 @@ from .analysis import (
     PreparedSequence, analyze_sequence, is_reference_measurement, prepare_sequence,
 )
 from .cli import CONFIG_FILENAME, build_parser, config_from_args, default_output_dir, parse_args
-from .imaging import frame_number_from_filename
+from .imaging import frame_number_from_filename, read_image
 from .models import AnalysisConfig
 from .output import RUN_PARAMS_FILENAME, write_csv, write_run_params
 from .visualization import render_debug_overlay
@@ -142,15 +142,31 @@ class PreviewSession:
                 return cls(config, prepared, index, frame_number_from_filename(path))
         return cls(config, prepared, 0, None)
 
-    def preview(self, index: int, overrides: dict) -> tuple[np.ndarray, np.ndarray, str]:
+    def raw_preview(self, index: int) -> tuple[np.ndarray, np.ndarray, str]:
+        path = self.prepared.files[index]
+        image = read_image(path)
+        lo, hi = np.percentile(image, [0.5, 99.5])
+        before = np.clip((image - lo) / max(1.0, hi - lo) * 255, 0, 255).astype(np.uint8)
+        return before, cv2.cvtColor(before, cv2.COLOR_GRAY2RGB), path.name
+
+    def preview(self, index: int, overrides: dict, recalibrate: bool = False) -> tuple[np.ndarray, np.ndarray, str]:
         config = replace(self.base_config, **overrides)
-        if config != (self.applied_config or self.base_config):
+        if recalibrate or config != (self.applied_config or self.base_config):
             # Reuse the fixed background and file range; calibration and sampled
             # automatic thresholds follow the same rules as full analysis.
             self.prepared = prepare_sequence(
                 config, self.prepared.files, self.prepared.background,
             )
             self.applied_config = config
+        if recalibrate:
+            reference = config.droplet_size_ref_frame
+            if reference is None:
+                for path in self.prepared.files:
+                    _, candidate = self.prepared.measure(path)
+                    if is_reference_measurement(candidate):
+                        reference = frame_number_from_filename(path)
+                        break
+            self.droplet_size_ref_frame = reference
         path = self.prepared.files[index]
         image, measurement = self.prepared.measure(path)
         scale = config.pixel_size_mm_per_px
@@ -431,6 +447,7 @@ class DropletApp:
         self.preview_future = None
         self.processing = False
         self.preview_ready = False
+        self.recalibrate_requested = False
         self.play_direction = 0
         self.play_timer = None
         self.preview_started = 0.0
@@ -733,6 +750,7 @@ class DropletApp:
         self.generation += 1
         generation = self.generation
         self.session = None
+        self.recalibrate_requested = False
         self.preview_ready = False
         self._lock_frame_controls()
         self._lock_output_controls()
@@ -905,26 +923,32 @@ class DropletApp:
         self.generation += 1
         self.preview_ready = False
         self._cancel_preview()
-        try:
-            self.overrides()
-        except ValueError as error:
-            self.pause()
-            self.process.configure(state="disabled")
-            self.set_status(f"Error: {error} Correct the parameter to continue.", "error")
-            return
+        if not self.selecting_surface:
+            try:
+                self.overrides()
+            except ValueError as error:
+                self.pause()
+                self.process.configure(state="disabled")
+                self.set_status(f"Error: {error} Correct the parameter to continue.", "error")
+                return
         self.process.configure(state="disabled")
         self.set_status("Updating current frame...")
         self.pending = self.root.after(0 if self.play_direction else 200, self._preview)
 
     def _preview(self):
         self.pending = None
-        overrides = self.overrides()
         self.preview_started = time.monotonic()
         index = min(len(self.session.prepared.files) - 1, max(0, round(self.frame_slider.get())))
         self.requested_preview_index = index
         session = self.session
+        if self.selecting_surface:
+            self.preview_future = self._submit("raw_preview", self.generation,
+                                               lambda: session.raw_preview(index))
+            return
+        overrides = self.overrides()
+        recalibrate = self.recalibrate_requested
         self.preview_future = self._submit("preview", self.generation,
-                                           lambda: session.preview(index, overrides))
+                                           lambda: session.preview(index, overrides, recalibrate))
 
     def zoom_image(self, event, index, direction=None):
         if self.images is not None:
@@ -942,7 +966,7 @@ class DropletApp:
         self.draw_images()
 
     def start_surface_selection(self):
-        if self.session is None or self.processing or self.images is None:
+        if self.session is None or self.processing:
             return
         self.pause()
         self.selecting_surface = True
@@ -950,6 +974,7 @@ class DropletApp:
         self.preview_labels[0].configure(cursor="crosshair")
         self.reselect_surface()
         self._update_process_state()
+        self.schedule_preview()
 
     def reselect_surface(self):
         self.surface_points = []
@@ -967,7 +992,10 @@ class DropletApp:
         self.draw_images()
 
     def select_surface_point(self, event):
-        if not self.selecting_surface or not self.preview_ready or len(self.surface_points) == 2:
+        if (not self.selecting_surface or self.images is None or len(self.surface_points) == 2
+                or self.displayed_frame_index != round(self.frame_slider.get())
+                or self.pending is not None
+                or (self.preview_future is not None and not self.preview_future.done())):
             return
         canvas = self.preview_labels[0]
         point = self.viewports[0].image_point(
@@ -988,8 +1016,9 @@ class DropletApp:
         self.draw_images()
 
     def confirm_surface_selection(self):
-        if (not self.selecting_surface or len(self.surface_points) != 2 or not self.preview_ready
-                or self.selection_frame_index != self.displayed_frame_index):
+        if (not self.selecting_surface or len(self.surface_points) != 2
+                or self.selection_frame_index != self.displayed_frame_index
+                or self.selection_frame_index != round(self.frame_slider.get())):
             return
         try:
             center_y, angle = surface_values_from_points(self.surface_points, self.images[0].shape[1])
@@ -997,10 +1026,18 @@ class DropletApp:
             self.surface_hint.set(str(error) + " Reselect the points.")
             return
         frame = frame_number_from_filename(self.session.prepared.files[self.selection_frame_index])
+        keep_auto_tilt = self.controls["surface_angle_deg"].auto.get() and messagebox.askyesno(
+            "Surface Tilt", "Keep Surface tilt on Auto?\n\n"
+            "Yes: detect the tilt automatically using the selected calibration frame.\n"
+            "No: turn off Auto and use the tilt of the manually selected line.",
+            parent=self.root,
+        )
         for name, value in (("surface_calibration_frame", frame), ("surface_y_px", center_y), ("surface_angle_deg", angle)):
             control = self.controls[name]
-            control.set_value(None if control.auto.get() else value, value, remember=False)
+            control.set_value(None if name == "surface_angle_deg" and keep_auto_tilt else value,
+                              value, remember=False)
         self.end_surface_selection()
+        self.recalibrate_requested = True
         self.schedule_preview()
 
     def draw_images(self):
@@ -1117,7 +1154,15 @@ class DropletApp:
                     self.reset.configure(state="normal")
                     self.save.configure(state="normal")
                     self.frame_changed(result.initial_index)
+                elif tag == "raw_preview":
+                    before, after, details = result
+                    self.images = before, after
+                    self.displayed_frame_index = self.requested_preview_index
+                    self.details.set(details)
+                    self.draw_images()
+                    self.set_status("Select two points on the surface in Before Processing.")
                 elif tag == "preview":
+                    self.recalibrate_requested = False
                     before, after, details = result
                     prepared = self.session.prepared
                     resolved = {
@@ -1126,6 +1171,9 @@ class DropletApp:
                         "surface_y_px": prepared.surface_line.center_y_int(),
                         "surface_angle_deg": prepared.surface_line.angle_deg,
                         "surface_calibration_frame": frame_number_from_filename(prepared.files[-1]),
+                        "droplet_size_ref_frame": (self.session.droplet_size_ref_frame
+                                                   if self.session.droplet_size_ref_frame is not None
+                                                   else frame_number_from_filename(prepared.files[0])),
                     }
                     for name, value in resolved.items():
                         if self.controls[name].auto.get():
