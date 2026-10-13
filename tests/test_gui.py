@@ -525,6 +525,35 @@ class GuiControlTests(unittest.TestCase):
 
 
 class GuiWorkflowTests(unittest.TestCase):
+    def test_combobox_wheel_does_not_change_selection(self):
+        try:
+            root = tk.Tk()
+        except tk.TclError as error:
+            self.skipTest(f"Tk display unavailable: {error}")
+        root.withdraw()
+        app = DropletApp(root)
+        self.addCleanup(app.close)
+        combo = app.reflection_combo
+        combo.configure(state="readonly")
+        combo.current(1)
+        root.update()
+        with patch.object(app, "schedule_preview") as preview:
+            for sequence, options in (
+                ("<MouseWheel>", {"delta": 120}),
+                ("<MouseWheel>", {"delta": -120}),
+                ("<Button-4>", {}),
+                ("<Button-5>", {}),
+            ):
+                combo.event_generate(sequence, **options)
+                root.update()
+                self.assertEqual(combo.current(), 1)
+            preview.assert_not_called()
+            combo.current(2)
+            combo.event_generate("<<ComboboxSelected>>")
+            root.update()
+            self.assertEqual(app.reflection.get(), "none")
+            preview.assert_called_once()
+
     def test_manual_surface_selection_zoom_frame_switch_and_auto_preservation(self):
         PreviewTests.setUp(self)
         try:

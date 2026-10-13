@@ -302,10 +302,10 @@ class CliConfigTests(unittest.TestCase):
         with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
             build_parser().parse_args(["--end-frame", "0"])
 
-    def test_default_foreground_delta_rejects_weak_shadow(self) -> None:
+    def test_default_auto_threshold_floor_allows_faint_liquid(self) -> None:
         config = config_from_args(build_parser().parse_args([]))
         self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
-        self.assertEqual(config.min_strong_threshold, 1500.0)
+        self.assertEqual(config.min_strong_threshold, 200.0)
 
     def test_surface_angle_is_automatic_unless_explicitly_overridden(self) -> None:
         parser = build_parser()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
+import warnings
 
 import numpy as np
 
@@ -21,9 +22,12 @@ from .imaging import (
     make_structure,
     read_image,
     touches_surface,
+    threshold_sampling_anchor,
 )
 from .models import (
     DEFAULT_THRESHOLD_SAMPLE_FRAMES,
+    DEFAULT_THRESHOLD_PRE_IMPACT_FRAMES,
+    DEFAULT_THRESHOLD_POST_IMPACT_FRAMES,
     DEFAULT_SURFACE_ANGLE_DEG,
     AnalysisConfig,
     FrameMeasurement,
@@ -82,6 +86,14 @@ class PreparedSequence:
     weak_threshold: float
     structure: np.ndarray
     target_center_x: float | None
+    threshold_anchor_frame: int | None = None
+    threshold_sampling_method: str = "manual"
+    threshold_sample_frames: tuple[int, ...] = ()
+
+    @property
+    def surface_is_calibrated(self) -> bool:
+        return (self.config.surface_y_px is not None
+                or self.config.surface_calibration_frame is not None)
 
     def measure(self, file_path: Path) -> tuple[np.ndarray, ComponentMeasurement]:
         image = read_image(file_path)
@@ -146,7 +158,11 @@ def prepare_sequence(
                 structure,
                 weak_threshold=preliminary_weak_threshold,
             )
-        if resolved_reflection_mode == "mirror":
+        if config.surface_y_px is not None and config.surface_angle_deg is not None:
+            # A complete manual line must not depend on successful silhouette
+            # calibration. The selected frame can still identify the target.
+            calibrated_surface_line = SurfaceLine(config.surface_y_px, config.surface_angle_deg)
+        elif resolved_reflection_mode == "mirror":
             calibrated_surface_line = estimate_surface_line_from_symmetry_frame(
                 files,
                 background,
@@ -207,21 +223,37 @@ def prepare_sequence(
     else:
         surface_line = SurfaceLine(float(coarse_surface_y), surface_angle_deg)
 
-    threshold = (
-        float(config.strong_threshold)
-        if config.strong_threshold is not None
-        else estimate_threshold(
-            files,
-            background,
-            surface_line.center_y_int(),
-            DEFAULT_THRESHOLD_SAMPLE_FRAMES,
-            config.min_strong_threshold,
+    anchor_index = None
+    sampling_method = "manual"
+    sample_files: list[Path] = []
+    threshold = preliminary_threshold
+    if config.strong_threshold is None:
+        anchor_index, sampling_method = threshold_sampling_anchor(
+            files, background, surface_line, preliminary_threshold,
+            preliminary_weak_threshold, effective_config, structure,
+            config.surface_y_px is not None or calibrated_surface_line is not None,
+            target_center_x,
         )
-    )
+        if anchor_index is None:
+            indices = np.unique(np.linspace(
+                0, len(files) - 1, min(DEFAULT_THRESHOLD_SAMPLE_FRAMES, len(files)), dtype=int
+            ))
+            sample_files = [files[index] for index in indices]
+        else:
+            sample_files = files[
+                max(0, anchor_index - DEFAULT_THRESHOLD_PRE_IMPACT_FRAMES):
+                anchor_index + DEFAULT_THRESHOLD_POST_IMPACT_FRAMES + 1
+            ]
+        threshold = estimate_threshold(
+            sample_files, background, surface_line.center_y_int(), len(sample_files),
+            config.min_strong_threshold, surface_line=surface_line,
+        )
     weak_threshold = resolve_weak_threshold(config, threshold)
     return PreparedSequence(
         effective_config, files, background, surface_line, threshold,
         weak_threshold, structure, target_center_x,
+        frame_number_from_filename(files[anchor_index]) if anchor_index is not None else None,
+        sampling_method, tuple(frame_number_from_filename(path) for path in sample_files),
     )
 
 
@@ -230,6 +262,13 @@ def analyze_sequence(
     progress: Callable[[int, int], None] | None = None,
 ) -> list[FrameMeasurement]:
     prepared = prepare_sequence(config)
+    if not prepared.surface_is_calibrated:
+        warnings.warn(
+            "Surface line is an uncalibrated background estimate. Select two surface "
+            "points in the GUI or supply --surface-y-px and --surface-angle-deg "
+            "before relying on contact width and impact time.",
+            UserWarning, stacklevel=2,
+        )
     files = prepared.files
     first_frame_number = frame_number_from_filename(files[0])
     surface_line = prepared.surface_line

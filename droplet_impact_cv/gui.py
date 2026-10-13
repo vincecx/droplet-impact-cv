@@ -191,6 +191,13 @@ class PreviewSession:
             f"Strong threshold: {self.prepared.threshold:g} | "
             f"Weak threshold: {self.prepared.weak_threshold:g}"
         )
+        if self.prepared.threshold_sampling_method != "manual":
+            details += (
+                f" | Auto samples: {self.prepared.threshold_sampling_method}"
+                f" (anchor: {self.prepared.threshold_anchor_frame or 'none'})"
+            )
+        if not self.prepared.surface_is_calibrated:
+            details += " | Surface uncalibrated: check the line or select two surface points."
         return before, cv2.cvtColor(after, cv2.COLOR_BGR2RGB), details
 
 
@@ -219,7 +226,7 @@ PARAMETERS = (
     Parameter("strong_threshold", "Main drop threshold", 1, 4095, 1,
               "How different a pixel must be from the clean background to count as liquid. Lower values detect more of the drop, but may also include image noise.", True),
     Parameter("min_strong_threshold", "Min auto threshold", 1, 4095, 1,
-              "Lowest main threshold allowed in Auto mode. Lower values help detect faint drops, but may include more image noise."),
+              "Lowest main threshold allowed in Auto mode (default 200). Auto samples around contact or a sustained shape change, with background noise setting the effective threshold."),
     Parameter("weak_threshold", "Faint liquid threshold", 1, 4095, 1,
               "Allows faint pixels next to clearly detected liquid to join the drop. Lower values can recover transparent edges, but may make the outline too large.", True),
     Parameter("weak_threshold_ratio", "Faint / main ratio", 0.001, 1, 0.001,
@@ -442,6 +449,9 @@ class ParameterControl(ttk.Frame):
 class DropletApp:
     def __init__(self, root: tk.Tk):
         self.root = root
+        # Block the default combobox wheel bindings; clicks and keys still work.
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            root.bind_class("TCombobox", sequence, lambda _: "break")
         root.title("Droplet Impact CV - Semi-automatic Mode")
         root.geometry("1380x900")
         root.minsize(1000, 650)

@@ -120,7 +120,7 @@ class ForegroundMaskTests(unittest.TestCase):
         self.assertEqual(empty.area_px2, 0)
         self.assertIsNone(empty.d_eq_volume_px)
 
-    def test_default_threshold_excludes_weak_shadow_attached_to_droplet(self) -> None:
+    def test_high_threshold_excludes_weak_shadow_attached_to_droplet(self) -> None:
         background = np.full((60, 60), 4000, dtype=np.float32)
         image = background.copy()
         image[15:40, 20:40] = 2000  # Droplet: delta 2000.
@@ -135,7 +135,7 @@ class ForegroundMaskTests(unittest.TestCase):
             image,
             background,
             SurfaceLine(45.0, angle_deg=0.0),
-            DEFAULT_MIN_STRONG_THRESHOLD,
+            1500.0,
             config,
             make_structure(1),
         )
@@ -180,7 +180,7 @@ class ForegroundMaskTests(unittest.TestCase):
             image,
             background,
             SurfaceLine(45.0, angle_deg=0.0),
-            DEFAULT_MIN_STRONG_THRESHOLD,
+            1500.0,
             config,
             make_structure(1),
             weak_threshold=500.0,
@@ -205,7 +205,7 @@ class ForegroundMaskTests(unittest.TestCase):
             image,
             background,
             SurfaceLine(25.0, angle_deg=0.0),
-            DEFAULT_MIN_STRONG_THRESHOLD,
+            1500.0,
             config,
             make_structure(1),
             weak_threshold=500.0,

@@ -257,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=positive_float,
         metavar="VALUE",
         default=DEFAULT_MIN_STRONG_THRESHOLD,
-        help="Lower bound for automatic threshold. Default: 1500",
+        help="Lower bound for automatic threshold. Default: 200",
     )
     parser.add_argument(
         "--min-droplet-area-px2",

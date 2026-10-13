@@ -144,6 +144,21 @@ brighter. The main threshold identifies clear liquid; the faint threshold
 extends the outline near already detected liquid. Enclosed bright regions are
 filled as part of the drop.
 
+The automatic main threshold has a floor (`--min-strong-threshold`). A first
+noise estimate locates a sampling anchor: first contact with a calibrated line,
+or sustained loss of ellipse agreement when the surface is uncalibrated. Shape
+detection requires three complete elliptical silhouettes and two consecutive
+deformed silhouettes of the tracked drop; it only chooses threshold samples,
+and does not set the reported impact frame. The sample window contains two
+frames before the anchor, the anchor itself, and seven frames after it (at most
+10 frames), clipped to the working range. With no anchor, up to eight evenly
+spaced frames cover the range rather than just its beginning.
+
+For each sample, background differences more than 30 px above the tilted line
+give a robust noise level (median + 8 MAD-based standard deviations). The 90th
+percentile of those per-frame levels, bounded by the floor, sets the threshold.
+Explicit thresholds bypass sampling.
+
 For missing liquid edges, lower the main or faint thresholds, or increase faint
 reach. For separate specks, increase minimum drop area or outline cleanup size.
 
@@ -160,6 +175,10 @@ frame and `--reflection-mode` determine how that line is found:
 
 `--surface-y-px` overrides the line's center position. Surface angles are
 clockwise; without calibration or an explicit angle, the fallback is `0` deg.
+
+Use **Select surface line manually** on an impacted frame when the automatic
+candidate is wrong. A manually supplied position and tilt bypass silhouette line
+fitting, even if a calibration frame is also selected.
 
 ### Spreading diameter, impact, and time
 
@@ -285,7 +304,7 @@ alphabetically by name, ignoring leading dashes.
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `--foreground-depth-px` | `220` | Search depth below the substrate line. |
-| `--min-strong-threshold` | `1500` | Lower bound used by automatic strong-threshold estimation. |
+| `--min-strong-threshold` | `200` | Lower bound used by automatic strong-threshold estimation. |
 | `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
 | `--top-exclusion-ratio` | `0.25` | Fraction of image height excluded from droplet detection at the top, between 0 and 1. Background and surface calibration still use the full image. |
 | `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |

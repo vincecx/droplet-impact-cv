@@ -117,23 +117,124 @@ def estimate_threshold(
     surface_y_px: int,
     sample_frame_count: int,
     min_strong_threshold: float,
+    *,
+    surface_line: SurfaceLine | None = None,
 ) -> float:
     sample_files = files[: min(sample_frame_count, len(files))]
-    if len(sample_files) < 2:
+    if not sample_files:
         return min_strong_threshold
 
-    roi_bottom = max(10, min(surface_y_px - 30, background.shape[0]))
-    noise_samples = []
+    yy, xx = np.indices(background.shape)
+    line = surface_line or SurfaceLine(float(surface_y_px))
+    roi = yy < line.y_at(xx, background.shape[1]) - 30
+    if not roi.any():
+        return min_strong_threshold
+    frame_thresholds = []
     for path in sample_files:
         image = read_image(path)
-        diff = np.abs(background[:roi_bottom] - image[:roi_bottom])
-        noise_samples.append(diff.ravel())
+        noise = np.abs(background[roi] - image[roi])
+        median = float(np.median(noise))
+        mad = float(np.median(np.abs(noise - median)))
+        frame_thresholds.append(median + 8.0 * 1.4826 * mad)
+    # Each frame gets equal weight. Pooling pixels hides short-lived noise
+    # changes around impact, and a single extreme frame should not dominate.
+    return max(min_strong_threshold, float(np.percentile(frame_thresholds, 90)))
 
-    noise = np.concatenate(noise_samples)
-    median = float(np.median(noise))
-    mad = float(np.median(np.abs(noise - median)))
-    sigma = 1.4826 * mad
-    return max(min_strong_threshold, median + 8.0 * sigma)
+
+def ellipse_overlap(component: np.ndarray) -> float | None:
+    """Ellipse agreement for a complete, non-border silhouette."""
+    contours, _ = cv2.findContours(
+        component.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if not contours:
+        return None
+    contour = max(contours, key=cv2.contourArea)
+    if len(contour) < 5:
+        return None
+    ellipse = np.zeros(component.shape, dtype=np.uint8)
+    cv2.ellipse(ellipse, cv2.fitEllipse(contour), 1, -1)
+    union = np.count_nonzero(component | (ellipse > 0))
+    return float(np.count_nonzero(component & (ellipse > 0)) / max(1, union))
+
+
+def threshold_sampling_anchor(
+    files: list[Path],
+    background: np.ndarray,
+    surface_line: SurfaceLine,
+    threshold: float,
+    weak_threshold: float,
+    config: AnalysisConfig,
+    structure: np.ndarray,
+    surface_is_calibrated: bool,
+    target_center_x: float | None = None,
+) -> tuple[int | None, str]:
+    """Find a sampling anchor, never a replacement for measured impact.
+
+    With a calibrated line, use first contact. Otherwise require three complete
+    ellipses followed by two non-elliptical frames of the same tracked drop.
+    The latter is only a deformation hint: reflection or oscillation can also
+    change a silhouette. If neither is available, the caller samples the range.
+    """
+    stable_overlaps: list[float] = []
+    first_deformed: int | None = None
+    center = target_center_x
+    top = excluded_top_rows(background.shape[0], config.top_exclusion_ratio)
+    for index, path in enumerate(files):
+        image = read_image(path)
+        if surface_is_calibrated:
+            mask = foreground_mask(
+                image, background, surface_line, threshold, config, structure,
+                weak_threshold=weak_threshold,
+            )
+            measurement = component_measurement(mask, surface_line, config, center)
+            if touches_surface(measurement, config):
+                return index, "surface-contact"
+            continue
+
+        mask = full_foreground_mask(
+            image, background, threshold, structure, weak_threshold, config.weak_reach_px
+        )
+        mask[:top] = 0
+        labels, count = ndi.label(mask)
+        candidates = []
+        for label in range(1, count + 1):
+            component = labels == label
+            area = int(component.sum())
+            if area < config.min_droplet_area_px2:
+                continue
+            bbox = component_bbox(component)
+            assert bbox is not None
+            x0, y0, x1, y1 = bbox
+            if x0 == 0 or x1 == mask.shape[1] - 1 or y0 <= top or y1 == mask.shape[0] - 1:
+                continue
+            x = (x0 + x1) / 2.0
+            distance = abs(x - center) if center is not None else 0.0
+            if center is not None and distance > max(20, (x1 - x0 + 1) / 2):
+                continue
+            candidates.append(((distance, -area), component, x))
+        if not candidates:
+            stable_overlaps.clear()
+            first_deformed = None
+            center = target_center_x
+            continue
+        _, component, center = min(candidates, key=lambda candidate: candidate[0])
+        overlap = ellipse_overlap(component)
+        if overlap is None:
+            stable_overlaps.clear()
+            first_deformed = None
+            continue
+        if (len(stable_overlaps) >= 3 and overlap < 0.90
+                and np.median(stable_overlaps[-3:]) - overlap >= 0.08):
+            if first_deformed is not None:
+                return first_deformed, "shape-change"
+            first_deformed = index
+        else:
+            first_deformed = None
+            if overlap >= 0.96:
+                stable_overlaps.append(overlap)
+            elif len(stable_overlaps) < 3:
+                stable_overlaps.clear()
+    return None, "range-sampling"
 
 
 def make_structure(radius_px: int) -> np.ndarray:
