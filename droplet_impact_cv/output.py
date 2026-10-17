@@ -71,6 +71,8 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                 "fps",
                 "pixel_size_mm_per_px",
                 "surface_calibration_frame",
+                "shadow_removed_px2",
+                "segmentation_warning",
             ]
         )
         for row in measurements:
@@ -102,6 +104,8 @@ def write_csv(path: Path, measurements: Iterable[FrameMeasurement]) -> None:
                     row.fps,
                     row.pixel_size_mm_per_px,
                     "" if row.surface_calibration_frame is None else row.surface_calibration_frame,
+                    row.shadow_removed_px2,
+                    row.segmentation_warning or "",
                 ]
             )
 

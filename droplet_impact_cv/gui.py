@@ -198,6 +198,10 @@ class PreviewSession:
             )
         if not self.prepared.surface_is_calibrated:
             details += " | Surface uncalibrated: check the line or select two surface points."
+        if measurement.shadow_removed_px2:
+            details += f" | Shadow fringe removed: {measurement.shadow_removed_px2} px2"
+        if measurement.segmentation_warning:
+            details += " | " + measurement.segmentation_warning
         return before, cv2.cvtColor(after, cv2.COLOR_BGR2RGB), details
 
 
@@ -232,7 +236,7 @@ PARAMETERS = (
     Parameter("weak_threshold_ratio", "Faint / main ratio", 0.001, 1, 0.001,
               "Sets the faint threshold as a fraction of the main threshold when faint detection is Auto. Lower ratios include fainter liquid near the drop."),
     Parameter("weak_reach_px", "Faint liquid reach (px)", 0, 200, 1,
-              "How far faint liquid can extend from clearly detected liquid. Increase to recover a thin sheet or rim; too much may include unrelated image changes."),
+              "How far faint liquid can extend from clearly detected liquid. 0 disables faint extension. Increase to recover a thin sheet or rim; too much may include unrelated image changes."),
     Parameter("min_droplet_area_px2", "Min drop area (px2)", 1, 10000, 1,
               "Ignore detected objects smaller than this area. Increase to remove small specks; too high may discard small drops."),
     Parameter("morphology_radius_px", "Outline cleanup size (px)", 0, 15, 1,
@@ -483,6 +487,7 @@ class DropletApp:
         self.details = tk.StringVar()
         self.reflection = tk.StringVar(value="auto")
         self.rim_to_rim = tk.BooleanVar()
+        self.shadow_suppression = tk.BooleanVar(value=True)
         self.output_mode = tk.StringVar(value="input")
         self.custom_output = tk.StringVar()
         self.output_summary = tk.StringVar(value="Choose an input folder first.")
@@ -584,6 +589,14 @@ class DropletApp:
         ttk.Button(row, text="Reset", width=6,
                    command=lambda: self.reset_choice("rim_to_rim")).pack(side="right")
         responsive_label(surface_group, text="Use the widest rim-to-rim span. Turn off to measure where the drop meets the substrate.").pack(fill="x", pady=4)
+        liquid_group = self.groups["Liquid detection"].body
+        row = ttk.Frame(liquid_group)
+        row.pack(fill="x", pady=(8, 0))
+        ttk.Checkbutton(row, text="Suppress near-surface shadow",
+                        variable=self.shadow_suppression, command=self.schedule_preview).pack(side="left")
+        ttk.Button(row, text="Reset", width=6,
+                   command=lambda: self.reset_choice("shadow_suppression")).pack(side="right")
+        responsive_label(liquid_group, text="Use the drop contour and two preceding frames to limit shadows before and at initial contact. Sharp thin sheets and deformed drops retain faint-liquid growth. Check contact-onset warnings.").pack(fill="x", pady=4)
         right = ttk.Frame(content, padding=(12, 0, 0, 0))
         content.add(right, weight=1)
         self.preview_panel = ttk.Frame(right)
@@ -880,10 +893,12 @@ class DropletApp:
             control.set_value(value, resolved.get(name, value))
         self.reflection.set(session.base_config.reflection_mode)
         self.rim_to_rim.set(session.base_config.rim_to_rim)
+        self.shadow_suppression.set(session.base_config.shadow_suppression)
 
     def overrides(self) -> dict:
         result = {name: control.get_value() for name, control in self.controls.items()}
         result.update(reflection_mode=self.reflection.get(), rim_to_rim=self.rim_to_rim.get())
+        result["shadow_suppression"] = self.shadow_suppression.get()
         frames = {frame_number_from_filename(path) for path in self.session.prepared.files}
         for name, label in (("surface_calibration_frame", "Surface calibration frame"),
                             ("droplet_size_ref_frame", "Droplet size reference frame")):
@@ -894,7 +909,8 @@ class DropletApp:
     def reset_choice(self, name: str):
         if self.session is None or self.processing:
             return
-        variable = self.reflection if name == "reflection_mode" else self.rim_to_rim
+        variable = {"reflection_mode": self.reflection, "rim_to_rim": self.rim_to_rim,
+                    "shadow_suppression": self.shadow_suppression}[name]
         variable.set(getattr(self.session.base_config, name))
         self.schedule_preview()
 

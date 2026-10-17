@@ -166,7 +166,7 @@ class PreviewTests(unittest.TestCase):
 
     def test_save_round_trip_preserves_auto_paths_flags_and_frame_range(self):
         config = replace(
-            load_folder_config(self.folder), fps=1234.5, rim_to_rim=True,
+            load_folder_config(self.folder), fps=1234.5, rim_to_rim=True, shadow_suppression=False,
             substrate="Al surface 名称", hydrophilicity="SHO", substrate_temp_deg_c=24.5,
             strong_threshold=None, weak_threshold=None, surface_y_px=None,
             surface_angle_deg=-1.25, surface_calibration_frame=None,
@@ -761,6 +761,10 @@ class GuiWorkflowTests(unittest.TestCase):
             app.rim_to_rim.set(True)
             app.reset_choice("rim_to_rim")
             self.assertFalse(app.rim_to_rim.get())
+            app.shadow_suppression.set(False)
+            self.assertFalse(app.overrides()["shadow_suppression"])
+            app.reset_choice("shadow_suppression")
+            self.assertTrue(app.shadow_suppression.get())
             app.reflection.set("none")
             app.reset_choice("reflection_mode")
             self.assertEqual(app.reflection.get(), "auto")

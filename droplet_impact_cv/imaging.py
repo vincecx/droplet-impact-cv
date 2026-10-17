@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import cv2
@@ -17,6 +18,7 @@ from .models import (
     ComponentMeasurement,
     SurfaceLine,
 )
+from .shadow import FreeDropModel, constrain_shadow_fringe, fit_free_drop_model
 
 
 SURFACE_MASK_BELOW_TOLERANCE_PX = 0
@@ -179,14 +181,20 @@ def threshold_sampling_anchor(
     first_deformed: int | None = None
     center = target_center_x
     top = excluded_top_rows(background.shape[0], config.top_exclusion_ratio)
+    previous_models: list[FreeDropModel | None] = []
     for index, path in enumerate(files):
         image = read_image(path)
         if surface_is_calibrated:
-            mask = foreground_mask(
+            segmentation = foreground_segmentation(
                 image, background, surface_line, threshold, config, structure,
                 weak_threshold=weak_threshold,
+                frame_number=frame_number_from_filename(path),
+                previous_models=tuple(model for model in previous_models[-2:]
+                                      if model is not None and model.is_detached),
+                preferred_center_x=center,
             )
-            measurement = component_measurement(mask, surface_line, config, center)
+            previous_models.append(segmentation.free_drop_model)
+            measurement = component_measurement(segmentation.mask, surface_line, config, center)
             if touches_surface(measurement, config):
                 return index, "surface-contact"
             continue
@@ -280,7 +288,9 @@ def hysteresis_change_mask(
     strong = change >= threshold
     if roi is not None:
         strong &= roi
-    if weak_threshold is None or weak_threshold >= threshold:
+    if max_propagation_px < 0:
+        raise ValueError("weak reach must be nonnegative")
+    if max_propagation_px == 0 or weak_threshold is None or weak_threshold >= threshold:
         return strong
     weak = change >= weak_threshold
     if roi is not None:
@@ -292,7 +302,32 @@ def hysteresis_change_mask(
     return ndi.binary_dilation(strong, mask=weak, iterations=max_propagation_px)
 
 
-def foreground_mask(
+@dataclass(frozen=True)
+class ForegroundSegmentation:
+    mask: np.ndarray
+    free_drop_model: FreeDropModel | None = None
+    shadow_removed_px2: int = 0
+    warning: str | None = None
+
+
+def strong_drop_model(
+    image: np.ndarray, background: np.ndarray, surface_line: SurfaceLine,
+    threshold: float, config: AnalysisConfig, structure: np.ndarray,
+    frame_number: int, preferred_center_x: float | None = None,
+) -> tuple[np.ndarray, FreeDropModel | None]:
+    yy, xx = np.indices(image.shape)
+    top_rows = excluded_top_rows(image.shape[0], config.top_exclusion_ratio)
+    roi = (yy <= surface_line.y_at(xx, image.shape[1])) & (yy >= top_rows)
+    strong = clean_binary_mask((np.abs(background - image) >= threshold) & roi, structure)
+    # Closing must not introduce artificial contact or cross the excluded border.
+    strong &= roi
+    core, _ = select_liquid_component(strong, surface_line, config, preferred_center_x)
+    model = fit_free_drop_model(core, surface_line, top_rows, config.surface_band_px,
+                                frame_number, allow_contact=True)
+    return core, model
+
+
+def foreground_segmentation(
     image: np.ndarray,
     background: np.ndarray,
     surface_line: SurfaceLine,
@@ -300,7 +335,11 @@ def foreground_mask(
     config: AnalysisConfig,
     structure: np.ndarray,
     weak_threshold: float | None = None,
-) -> np.ndarray:
+    *,
+    frame_number: int = 0,
+    previous_models: tuple[FreeDropModel, ...] = (),
+    preferred_center_x: float | None = None,
+) -> ForegroundSegmentation:
     yy, xx = np.indices(image.shape)
     distance_from_surface = yy - surface_line.y_at(xx, image.shape[1])
     top_rows = excluded_top_rows(image.shape[0], config.top_exclusion_ratio)
@@ -316,7 +355,38 @@ def foreground_mask(
     mask = clean_binary_mask(changed.astype(np.uint8), structure)
     # Cleanup can expand the outline, so enforce the exclusion again afterwards.
     mask[:top_rows] = 0
-    return mask
+    if not config.shadow_suppression or config.weak_reach_px == 0 or weak_threshold is None or weak_threshold >= threshold:
+        return ForegroundSegmentation(mask)
+    core, model = strong_drop_model(
+        image, background, surface_line, threshold, config, structure,
+        frame_number, preferred_center_x,
+    )
+    removed = 0
+    if model is not None:
+        mask, removed = constrain_shadow_fringe(
+            mask.astype(bool), core, model, previous_models, config.surface_band_px,
+            image, background, weak_threshold, surface_line,
+        )
+    warning = None
+    if core.any():
+        candidate, _ = select_liquid_component(mask, surface_line, config, preferred_center_x)
+        if surface_intersection_bounds(candidate, surface_line, config.surface_band_px) is not None:
+            if surface_intersection_bounds(core, surface_line, config.surface_band_px) is None:
+                warning = "Possible shadow contact: verify the lower contour and surface line."
+            elif previous_models and (model is None or not model.is_detached):
+                warning = "Contact onset: verify the lower contour; shadow and liquid may overlap."
+    return ForegroundSegmentation(mask.astype(np.uint8), model, removed, warning)
+
+
+def foreground_mask(
+    image: np.ndarray, background: np.ndarray, surface_line: SurfaceLine,
+    threshold: float, config: AnalysisConfig, structure: np.ndarray,
+    weak_threshold: float | None = None,
+) -> np.ndarray:
+    """Frame-only candidate mask; sequence analysis supplies temporal evidence."""
+    return foreground_segmentation(
+        image, background, surface_line, threshold, config, structure, weak_threshold,
+    ).mask
 
 
 def excluded_top_rows(height: int, ratio: float) -> int:

@@ -31,7 +31,7 @@ CONFIG_PARAMETER_ORDER = (
     "droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px",
     "surface_angle_deg", "reflection_mode", "mirror_min_depth_px",
     "surface_search_start_px", "surface_drop_delta",
-    "top_exclusion_ratio", "strong_threshold", "weak_threshold",
+    "top_exclusion_ratio", "strong_threshold", "weak_threshold", "shadow_suppression",
     "min_strong_threshold", "weak_threshold_ratio", "weak_reach_px",
     "min_droplet_area_px2", "morphology_radius_px", "foreground_depth_px",
     "surface_band_px", "rim_to_rim", "min_contact_px", "min_impact_width_px",
@@ -55,6 +55,7 @@ class AnalysisConfig:
     weak_threshold: float | None = None
     weak_threshold_ratio: float = DEFAULT_WEAK_THRESHOLD_RATIO
     weak_reach_px: int = DEFAULT_WEAK_REACH_PX
+    shadow_suppression: bool = True
     min_strong_threshold: float = DEFAULT_MIN_STRONG_THRESHOLD
     min_droplet_area_px2: int = 250
     morphology_radius_px: int = 3
@@ -107,6 +108,8 @@ class FrameMeasurement:
     ref_d_normal_mm: float | None = None
     ref_clearance_px: float | None = None
     ref_clearance_mm: float | None = None
+    shadow_removed_px2: int = 0
+    segmentation_warning: str | None = None
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,8 @@ class ComponentMeasurement:
     surface_clearance_px: float | None = None
     surface_parallel_line: tuple[int, int, int, int] | None = None
     surface_normal_line: tuple[int, int, int, int] | None = None
+    shadow_removed_px2: int = 0
+    segmentation_warning: str | None = None
 
 
 @dataclass(frozen=True)

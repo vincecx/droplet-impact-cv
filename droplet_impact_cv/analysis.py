@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 import warnings
@@ -18,12 +18,14 @@ from .imaging import (
     estimate_threshold,
     find_image_files,
     frame_number_from_filename,
-    foreground_mask,
+    foreground_segmentation,
     make_structure,
     read_image,
     touches_surface,
     threshold_sampling_anchor,
+    strong_drop_model,
 )
+from .shadow import FreeDropModel
 from .models import (
     DEFAULT_THRESHOLD_SAMPLE_FRAMES,
     DEFAULT_THRESHOLD_PRE_IMPACT_FRAMES,
@@ -89,6 +91,28 @@ class PreparedSequence:
     threshold_anchor_frame: int | None = None
     threshold_sampling_method: str = "manual"
     threshold_sample_frames: tuple[int, ...] = ()
+    _free_drop_models: dict[tuple, FreeDropModel | None] = field(default_factory=dict, repr=False, compare=False)
+
+    def _model_key(self, path: Path) -> tuple:
+        # Include settings so dataclasses.replace cannot reuse stale evidence.
+        return path, self.config, self.threshold, self.weak_threshold, self.surface_line, self.target_center_x
+
+    def _previous_models(self, path: Path) -> tuple[FreeDropModel, ...]:
+        index = self.files.index(path)
+        models = []
+        for previous in self.files[max(0, index - 2):index]:
+            key = self._model_key(previous)
+            if key not in self._free_drop_models:
+                _, model = strong_drop_model(
+                    read_image(previous), self.background, self.surface_line,
+                    self.threshold, self.config, self.structure,
+                    frame_number_from_filename(previous), self.target_center_x,
+                )
+                self._free_drop_models[key] = model
+            model = self._free_drop_models[key]
+            if model is not None and model.is_detached:
+                models.append(model)
+        return tuple(models)
 
     @property
     def surface_is_calibrated(self) -> bool:
@@ -97,12 +121,22 @@ class PreparedSequence:
 
     def measure(self, file_path: Path) -> tuple[np.ndarray, ComponentMeasurement]:
         image = read_image(file_path)
-        mask = foreground_mask(
+        previous = ()
+        if self.config.shadow_suppression and self.config.weak_reach_px > 0 and self.weak_threshold < self.threshold:
+            previous = self._previous_models(file_path)
+        segmentation = foreground_segmentation(
             image, self.background, self.surface_line, self.threshold,
             self.config, self.structure, weak_threshold=self.weak_threshold,
+            frame_number=frame_number_from_filename(file_path),
+            previous_models=previous, preferred_center_x=self.target_center_x,
         )
-        return image, component_measurement(
-            mask, self.surface_line, self.config, self.target_center_x
+        self._free_drop_models[self._model_key(file_path)] = segmentation.free_drop_model
+        measurement = component_measurement(
+            segmentation.mask, self.surface_line, self.config, self.target_center_x,
+        )
+        return image, replace(
+            measurement, shadow_removed_px2=segmentation.shadow_removed_px2,
+            segmentation_warning=segmentation.warning,
         )
 
 
@@ -430,6 +464,8 @@ def analyze_sequence(
                     and ref_measurement.surface_clearance_px is not None
                     else None
                 ),
+                shadow_removed_px2=measurement.shadow_removed_px2,
+                segmentation_warning=measurement.segmentation_warning,
             )
         )
 

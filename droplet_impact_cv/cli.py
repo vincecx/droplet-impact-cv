@@ -241,6 +241,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum mirror candidate depth below the coarse surface line in px. Default: 50",
     )
     parser.add_argument(
+        "--shadow-suppression",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Limit near-surface shadows using the approaching drop's contour and two preceding frames. Default: enabled.",
+    )
+    parser.add_argument(
         "--weak-reach-px",
         dest="weak_reach_px",
         type=nonnegative_int,
@@ -248,7 +254,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_WEAK_REACH_PX,
         help=(
             "Maximum distance in px that weak-threshold detections extend "
-            "from a strong detection. Default: 40"
+            "from a strong detection. 0 disables faint extension. Default: 40"
         ),
     )
     parser.add_argument(
@@ -411,6 +417,7 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         weak_threshold=args.weak_threshold,
         weak_threshold_ratio=args.weak_threshold_ratio,
         weak_reach_px=args.weak_reach_px,
+        shadow_suppression=args.shadow_suppression,
         min_strong_threshold=args.min_strong_threshold,
         min_droplet_area_px2=int(args.min_droplet_area_px2),
         morphology_radius_px=args.morphology_radius_px,

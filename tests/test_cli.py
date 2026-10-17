@@ -17,6 +17,14 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_shadow_suppression_config_and_cli_override(self):
+        self.assertTrue(config_from_args(build_parser().parse_args([])).shadow_suppression)
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text('--no-shadow-suppression\n', encoding="utf-8")
+            self.assertFalse(config_from_args(parse_args([str(folder)])).shadow_suppression)
+            self.assertTrue(config_from_args(parse_args([str(folder), "--shadow-suppression"])).shadow_suppression)
+
     def test_short_output_option_selects_directory_in_cli_and_folder_config(self):
         # A CSV-looking argument is still a directory; -o has no CSV alias.
         config = config_from_args(build_parser().parse_args(["-o", "results.csv"]))

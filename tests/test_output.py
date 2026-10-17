@@ -89,6 +89,8 @@ class OutputTests(unittest.TestCase):
             ref_d_normal_mm=0.989517864,
             ref_clearance_px=74.0,
             ref_clearance_mm=0.526793672,
+            shadow_removed_px2=123,
+            segmentation_warning="Check contact boundary.",
         )
         with TemporaryDirectory() as temporary_dir:
             output_path = Path(temporary_dir) / "result.csv"
@@ -125,6 +127,8 @@ class OutputTests(unittest.TestCase):
                 "fps",
                 "pixel_size_mm_per_px",
                 "surface_calibration_frame",
+                "shadow_removed_px2",
+                "segmentation_warning",
             ],
         )
         self.assertEqual(
@@ -156,6 +160,8 @@ class OutputTests(unittest.TestCase):
                 "8000.0",
                 "0.00711883341",
                 "61",
+                "123",
+                "Check contact boundary.",
             ],
         )
 

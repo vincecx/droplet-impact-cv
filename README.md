@@ -144,6 +144,34 @@ brighter. The main threshold identifies clear liquid; the faint threshold
 extends the outline near already detected liquid. Enclosed bright regions are
 filled as part of the drop.
 
+Near-surface shadow suppression is enabled by default. Two preceding complete
+elliptical main-threshold silhouettes must agree in size and motion with the
+approaching drop. The upper outline estimates the normal faint-edge thickness;
+only an unusually thick lower fringe is trimmed. A detached drop retains every
+main-threshold pixel. At initial contact, a nearly complete ellipse with at most
+5% truncation below the surface can constrain diffuse outer fringes. A normalized
+gradient check preserves sharp thin-sheet edges; deformed silhouettes receive no
+shape correction. The correction runs after outline cleanup so cleanup cannot
+reconnect the rejected shadow, and it never replaces the whole silhouette with
+an ellipse. CLI, preview seeking, playback, and threshold-contact sampling use
+the same preceding filename frames, independent of viewing order.
+
+This conservative guard leaves ambiguous cases unchanged. In particular, it
+cannot reliably correct a main-threshold silhouette distorted by shadows or
+resolve a gap smaller than its edge uncertainty. The preview and CSV flag
+possible shadow contact when only the faint candidate reaches the surface,
+and contact onset immediately following a tracked detached drop.
+Check the raw lower contour and calibrated surface before trusting such contact.
+Disable **Suppress near-surface shadow** or use `--no-shadow-suppression` to
+compare with ordinary faint-region growth.
+
+`--weak-reach-px 0` disables faint extension. Positive values bound the number of
+pixel-neighbor growth steps; increasing reach permits more growth, whereas
+increasing the faint threshold rejects weaker changes. Older versions accidentally
+treated reach 0 as unlimited growth. To retain faint-sheet recovery when opening
+an older configuration containing 0, select a positive reach such as 40 and
+inspect the resulting outline.
+
 The automatic main threshold has a floor (`--min-strong-threshold`). A first
 noise estimate locates a sampling anchor: first contact with a calibrated line,
 or sustained loss of ellipse agreement when the surface is uncalibrated. Shape
@@ -268,6 +296,8 @@ units: `_px`, `_mm`, `_ms`, and `_px2` for area.
 | `ref_clearance_px`, `ref_clearance_mm` | Reference lower-contour clearance normal to the substrate. |
 | `impact_frame`, `surface_y_px` | Detected impact frame and fixed surface-line center y coordinate. |
 | `droplet_area_px2` | Current frame's filled gas-side area after surface clipping. |
+| `shadow_removed_px2` | Candidate pixels rejected by the near-surface shadow guard before final measurement; may include below-surface reflection pixels. |
+| `segmentation_warning` | Nonempty when faint-only surface contact needs visual review; an empty value does not certify an accurate boundary. |
 | `fps`, `pixel_size_mm_per_px`, `surface_calibration_frame` | Camera and surface calibration metadata. |
 
 ## Parameter reference
@@ -304,10 +334,11 @@ alphabetically by name, ignoring leading dashes.
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `--foreground-depth-px` | `220` | Search depth below the substrate line. |
+| `--shadow-suppression`, `--no-shadow-suppression` | enabled | Use contour, motion, and edge evidence to limit lower shadow fringes before and at initial contact. |
 | `--min-strong-threshold` | `200` | Lower bound used by automatic strong-threshold estimation. |
 | `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
 | `--top-exclusion-ratio` | `0.25` | Fraction of image height excluded from droplet detection at the top, between 0 and 1. Background and surface calibration still use the full image. |
-| `--weak-reach-px` | `40` | Maximum distance faint liquid can extend from clearly detected liquid. |
+| `--weak-reach-px` | `40` | Maximum faint-growth steps from clearly detected liquid; 0 disables faint extension. |
 | `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
 | `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
 
