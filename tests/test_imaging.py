@@ -12,6 +12,7 @@ import tifffile
 from droplet_impact_cv.imaging import (
     build_background,
     component_measurement,
+    clean_binary_mask,
     estimate_contact_line,
     estimate_surface_line_from_nonreflection_frame,
     select_liquid_component,
@@ -79,6 +80,31 @@ class BackgroundTests(unittest.TestCase):
 
 
 class ForegroundMaskTests(unittest.TestCase):
+    def test_zero_cleanup_radius_preserves_open_gaps_and_isolated_pixels(self):
+        mask = np.zeros((35, 35), dtype=np.uint8)
+        mask[8:18, 5:12] = 1
+        mask[8:18, 13:20] = 1
+        mask[25, 25] = 1
+        uncleaned = clean_binary_mask(mask, make_structure(0))
+        np.testing.assert_array_equal(uncleaned, mask)
+        cleaned = clean_binary_mask(mask, make_structure(1))
+        self.assertTrue(cleaned[12, 12])
+        self.assertFalse(cleaned[25, 25])
+        with self.assertRaises(ValueError):
+            make_structure(-1)
+
+    def test_gas_side_area_threshold_accepts_a_narrow_detached_drop(self):
+        mask = np.zeros((50, 50), dtype=np.uint8)
+        mask[10:18, 20:24] = 1  # 32 pixels of area, only four pixels of width.
+        config = AnalysisConfig(Path("input"), Path("out.csv"), min_contact_px=30,
+                                min_droplet_area_px2=1, top_exclusion_ratio=0)
+        component, area = select_liquid_component(mask, SurfaceLine(40), config)
+        self.assertEqual(area, 32)
+        self.assertTrue(component[12, 22])
+        rejected, area = select_liquid_component(mask, SurfaceLine(40), replace(config, min_contact_px=33))
+        self.assertEqual(area, 0)
+        self.assertFalse(rejected.any())
+
     def test_top_exclusion_clips_strong_weak_and_cleaned_pixels(self) -> None:
         background = np.full((41, 40), 4000, dtype=np.float32)
         image = background.copy()

@@ -134,6 +134,8 @@ class PreviewTests(unittest.TestCase):
                          [option_names[name] for name in CONFIG_PARAMETER_ORDER
                           if name in option_names and getattr(config, name) is not None])
         self.assertEqual(load_folder_config(self.folder), config)
+        self.assertIn("--min-gas-area-px2", self.config_file.read_text(encoding="utf-8"))
+        self.assertNotIn("--min-contact-px", self.config_file.read_text(encoding="utf-8"))
 
     def test_gui_initializes_configured_output_folder_and_preserves_legacy_paths(self):
         original = self.config_file.read_text(encoding="utf-8")

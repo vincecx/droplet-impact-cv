@@ -160,7 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=nonnegative_int,
         metavar="Y",
         default=None,
-        help="Override detected surface y coordinate in px.",
+        help="Override surface-line y at the image's horizontal midpoint in px.",
     )
     parser.add_argument(
         "--surface-calibration-frame",
@@ -188,8 +188,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=REFLECTION_MODES,
         default="auto",
         help=(
-            "Surface calibration and measurement mode: auto, mirror, or none. "
-            "Weak reflections should use none. Default: auto."
+            "Surface calibration method: auto selects a method, mirror uses reflection "
+            "symmetry, none uses the droplet lower contour without mirror symmetry. "
+            "This does not enable or disable shadow suppression. Default: auto."
         ),
     )
     parser.add_argument(
@@ -207,7 +208,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=positive_float,
         metavar="VALUE",
         default=None,
-        help="Override foreground change threshold in gray levels.",
+        help="Strong threshold on absolute change from the clean background in gray levels; not an image-brightness cutoff.",
     )
     parser.add_argument(
         "--weak-threshold",
@@ -253,8 +254,9 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="DISTANCE",
         default=DEFAULT_WEAK_REACH_PX,
         help=(
-            "Maximum distance in px that weak-threshold detections extend "
-            "from a strong detection. 0 disables faint extension. Default: 40"
+            "Maximum 4-neighbor growth steps through weak-change pixels from a "
+            "strong detection, before outline cleanup; not a Euclidean radius. "
+            "0 disables weak extension. Default: 40"
         ),
     )
     parser.add_argument(
@@ -277,15 +279,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--morphology-radius-px",
         type=nonnegative_int,
         default=3,
-        help="Morphology radius for mask cleanup.",
+        help="Elliptical cleanup-kernel radius in px (kernel width 2*radius+1). 0 disables gap/speck morphology; enclosed-hole filling remains. Default: 3",
     )
     parser.add_argument(
         "--surface-band-px",
         type=nonnegative_int,
         default=DEFAULT_SURFACE_BAND_PX,
         help=(
-            "Half-height in px of the band around the surface line within "
-            "which the spreading width is measured. Default: 1"
+            "Vertical half-height in px of the contact-measurement band at each x; "
+            "not the full band thickness or surface-normal distance. Default: 1"
         ),
     )
     parser.add_argument(
@@ -304,17 +306,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=nonnegative_int,
         metavar="DEPTH",
         default=220,
-        help="Foreground ROI depth below the surface line.",
+        help="Candidate-search depth vertically below the surface line in px; final reported area is clipped to the gas side. Default: 220",
     )
     parser.add_argument(
+        "--min-gas-area-px2",
         "--min-contact-px",
         dest="min_contact_px",
         type=nonnegative_int,
-        metavar="COUNT",
+        metavar="AREA",
         default=30,
         help=(
-            "Minimum foreground pixels just above the surface line for a "
-            "component to be selected as the droplet. Default: 30"
+            "Minimum total detected area on or above the surface in px2 for a "
+            "selected component; applies to detached drops too. Not contact-line "
+            "width; --min-contact-px is a compatibility alias. Default: 30"
         ),
     )
     parser.add_argument(

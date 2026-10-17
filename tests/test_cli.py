@@ -17,6 +17,19 @@ from droplet_impact_cv.models import (
 
 
 class CliConfigTests(unittest.TestCase):
+    def test_gas_area_name_retains_legacy_alias_and_cli_precedence(self):
+        parser = build_parser()
+        for option in ("--min-gas-area-px2", "--min-contact-px"):
+            self.assertEqual(config_from_args(parser.parse_args([option, "42"])).min_contact_px, 42)
+        with TemporaryDirectory() as temporary_dir:
+            folder = Path(temporary_dir)
+            (folder / "cv_config.txt").write_text('--min-contact-px 30\n', encoding="utf-8")
+            config = config_from_args(parse_args([str(folder), "--min-gas-area-px2", "42"]))
+            self.assertEqual(config.min_contact_px, 42)
+            (folder / "cv_config.txt").write_text('--min-gas-area-px2 42\n', encoding="utf-8")
+            config = config_from_args(parse_args([str(folder), "--min-contact-px", "30"]))
+            self.assertEqual(config.min_contact_px, 30)
+
     def test_shadow_suppression_config_and_cli_override(self):
         self.assertTrue(config_from_args(build_parser().parse_args([])).shadow_suppression)
         with TemporaryDirectory() as temporary_dir:

@@ -65,7 +65,7 @@ class AnalysisConfig:
     rim_to_rim: bool = False
     foreground_depth_px: int = 220
     top_exclusion_ratio: float = DEFAULT_TOP_EXCLUSION_RATIO
-    min_contact_px: int = 30
+    min_contact_px: int = 30  # Legacy field name: total gas-side area in px2, not contact width.
     min_impact_width_px: int = 30
     include_pre_impact: bool = False
     time_zero: str = "impact"

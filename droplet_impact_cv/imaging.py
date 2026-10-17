@@ -246,7 +246,9 @@ def threshold_sampling_anchor(
 
 
 def make_structure(radius_px: int) -> np.ndarray:
-    radius_px = max(1, int(radius_px))
+    radius_px = int(radius_px)
+    if radius_px < 0:
+        raise ValueError("morphology radius must be nonnegative")
     size = radius_px * 2 + 1
     return cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
 

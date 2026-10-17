@@ -162,8 +162,14 @@ resolve a gap smaller than its edge uncertainty. The preview and CSV flag
 possible shadow contact when only the faint candidate reaches the surface,
 and contact onset immediately following a tracked detached drop.
 Check the raw lower contour and calibrated surface before trusting such contact.
-Disable **Suppress near-surface shadow** or use `--no-shadow-suppression` to
+Disable **Approach / onset shadow guard** or use `--no-shadow-suppression` to
 compare with ordinary faint-region growth.
+
+The guard targets approach and initial contact, not general contact detection
+during recoil or lift-off. A faint neck during those later stages can still
+produce a nonzero contact width and a review warning. Reducing weak growth to
+remove such a neck can also remove real faint liquid near maximum spreading;
+inspect both stages before changing the growth limit.
 
 `--weak-reach-px 0` disables faint extension. Positive values bound the number of
 pixel-neighbor growth steps; increasing reach permits more growth, whereas
@@ -313,6 +319,33 @@ alphabetically by name, ignoring leading dashes.
 | `--fps` | `1000` | Camera frame rate used to calculate `time_ms`. |
 | `--pixel-size-mm-per-px` | `0.01` | Physical length represented by one pixel. |
 
+### Names and units
+
+GUI threshold labels refer to **background change**, not raw image brightness.
+Both brightening and darkening count. **Weak growth limit (steps)** is a count
+of 4-neighbor propagation steps through eligible pixels before cleanup, not a
+Euclidean radius or a strict bound on the final cleaned contour. The compatible
+CLI and runtime field names remain `--weak-reach-px` and `weak_reach_px`.
+
+**Min gas-side area (px2)** is the total detected area on or above the surface,
+including detached drops; it is not contact-line length. Use
+`--min-gas-area-px2`; `--min-contact-px` remains a compatibility alias. Saved
+configuration files use the new option. Python and `run_params.json` retain the
+legacy field `min_contact_px` with this area meaning. **Min component area**
+instead filters the whole candidate component (which may include reflections)
+and is also applied when retaining a component after surface clipping.
+
+**Outline cleanup radius (px)** defines an elliptical kernel of width
+`2*radius+1`. Radius 0 now disables closing/opening morphology; enclosed-hole
+filling and component selection still apply. Earlier versions silently used
+radius 1 when 0 was entered.
+
+**Contact-band half-height (px)** is vertical y tolerance above and below the
+line at each x, not full band thickness or surface-normal distance. **Surface
+calibration method** selects how the fixed line is calibrated: `none` uses the
+lower contour without mirror symmetry. It does not disable surface calibration
+or switch shadow suppression on or off.
+
 ### Substrate and width measurement
 
 | Parameter | Default | Purpose |
@@ -325,7 +358,7 @@ alphabetically by name, ignoring leading dashes.
 | `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
 | `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
 | `--surface-angle-deg` | detected or `0` | Manually override the clockwise surface angle. |
-| `--surface-band-px` | `1` | Half-height of the band in which spreading width is measured. |
+| `--surface-band-px` | `1` | Vertical half-height of the contact-measurement band at each x, not full thickness or normal distance. |
 | `--surface-calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
 
@@ -333,12 +366,12 @@ alphabetically by name, ignoring leading dashes.
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `--foreground-depth-px` | `220` | Search depth below the substrate line. |
+| `--foreground-depth-px` | `220` | Candidate-search depth vertically below the line; reported area remains clipped to the gas side. |
 | `--shadow-suppression`, `--no-shadow-suppression` | enabled | Use contour, motion, and edge evidence to limit lower shadow fringes before and at initial contact. |
 | `--min-strong-threshold` | `200` | Lower bound used by automatic strong-threshold estimation. |
-| `--strong-threshold` | automatic | Main liquid-detection threshold; lower values include fainter liquid and more noise. |
+| `--strong-threshold` | automatic | Strong threshold on absolute background change in gray levels, not raw image brightness. |
 | `--top-exclusion-ratio` | `0.25` | Fraction of image height excluded from droplet detection at the top, between 0 and 1. Background and surface calibration still use the full image. |
-| `--weak-reach-px` | `40` | Maximum faint-growth steps from clearly detected liquid; 0 disables faint extension. |
+| `--weak-reach-px` | `40` | Maximum 4-neighbor weak-growth steps before cleanup; not a Euclidean radius. 0 disables weak extension. |
 | `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
 | `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
 
@@ -346,9 +379,9 @@ alphabetically by name, ignoring leading dashes.
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `--min-contact-px` | `30` | Minimum detected pixels above the substrate for a selected drop. |
-| `--min-droplet-area-px2` | `250` | Ignore detected objects smaller than this area. |
-| `--morphology-radius-px` | `3` | Cleanup size for closing gaps and removing small specks. |
+| `--min-gas-area-px2` (alias `--min-contact-px`) | `30` | Minimum total detected gas-side area, not contact width; also applies to detached drops. |
+| `--min-droplet-area-px2` | `250` | Minimum candidate-component area, also used after surface clipping. |
+| `--morphology-radius-px` | `3` | Elliptical cleanup radius; kernel width is `2*radius+1`. 0 disables gap/speck morphology; hole filling remains. |
 
 ### Input and working range
 

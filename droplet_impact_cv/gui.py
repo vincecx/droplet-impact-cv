@@ -227,26 +227,26 @@ PARAMETERS = (
               "Choose an image number after impact where the drop meets the substrate. This image sets the substrate line; changing it can move that line. Auto uses the clean background.", True),
     Parameter("top_exclusion_ratio", "Exclude top image fraction", 0, 1, 0.01,
               "Fraction of image height excluded from droplet detection at the top. 0 includes all rows; 1 excludes all rows. Background and surface calibration use the full image."),
-    Parameter("strong_threshold", "Main drop threshold", 1, 4095, 1,
-              "How different a pixel must be from the clean background to count as liquid. Lower values detect more of the drop, but may also include image noise.", True),
-    Parameter("min_strong_threshold", "Min auto threshold", 1, 4095, 1,
+    Parameter("strong_threshold", "Strong change threshold (gray)", 1, 4095, 1,
+              "Threshold on absolute brightening or darkening relative to the clean background, in gray levels. Seeds the candidate liquid; it is not a raw image-brightness cutoff.", True),
+    Parameter("min_strong_threshold", "Min auto strong threshold (gray)", 1, 4095, 1,
               "Lowest main threshold allowed in Auto mode (default 200). Auto samples around contact or a sustained shape change, with background noise setting the effective threshold."),
-    Parameter("weak_threshold", "Faint liquid threshold", 1, 4095, 1,
-              "Allows faint pixels next to clearly detected liquid to join the drop. Lower values can recover transparent edges, but may make the outline too large.", True),
-    Parameter("weak_threshold_ratio", "Faint / main ratio", 0.001, 1, 0.001,
+    Parameter("weak_threshold", "Weak change threshold (gray)", 1, 4095, 1,
+              "Lower threshold on absolute change from the clean background. Connected weak-change pixels can extend the strong candidate when growth steps are positive; lower values recover faint edges but can admit shadows.", True),
+    Parameter("weak_threshold_ratio", "Weak / strong change ratio", 0.001, 1, 0.001,
               "Sets the faint threshold as a fraction of the main threshold when faint detection is Auto. Lower ratios include fainter liquid near the drop."),
-    Parameter("weak_reach_px", "Faint liquid reach (px)", 0, 200, 1,
-              "How far faint liquid can extend from clearly detected liquid. 0 disables faint extension. Increase to recover a thin sheet or rim; too much may include unrelated image changes."),
-    Parameter("min_droplet_area_px2", "Min drop area (px2)", 1, 10000, 1,
-              "Ignore detected objects smaller than this area. Increase to remove small specks; too high may discard small drops."),
-    Parameter("morphology_radius_px", "Outline cleanup size (px)", 0, 15, 1,
-              "Size of the image cleanup tool. Increase to close small gaps and remove specks; too much can smooth away real fine details."),
-    Parameter("surface_band_px", "Contact band (px)", 0, 30, 1,
-              "Distance above and below the substrate line used to find contact width. Increase if the contact edge is blurred; too much may count liquid away from the surface."),
+    Parameter("weak_reach_px", "Weak growth limit (steps)", 0, 200, 1,
+              "Maximum 4-neighbor growth steps through weak-change pixels from any strong pixel, before outline cleanup. This is not a circular radius. 0 disables weak extension; larger values recover more thin liquid but may admit shadows."),
+    Parameter("min_droplet_area_px2", "Min component area (px2)", 1, 10000, 1,
+              "Minimum detected component area. Candidates may include below-surface reflections; the reported liquid area is gas-side only. Also filters components after surface clipping."),
+    Parameter("morphology_radius_px", "Outline cleanup radius (px)", 0, 15, 1,
+              "Radius of the elliptical cleanup kernel; its width is 2*radius+1. 0 disables gap-closing and speck-removal morphology. Enclosed-hole filling and component selection remain active."),
+    Parameter("surface_band_px", "Contact-band half-height (px)", 0, 30, 1,
+              "Vertical y tolerance above and below the surface at each x, not total band thickness or surface-normal distance. Increasing it can count liquid away from the surface."),
     Parameter("foreground_depth_px", "Search depth below surface (px)", 0, 500, 1,
-              "How far below the substrate line to look for image changes. Increase if the contact region is cut off; too much may include reflections."),
-    Parameter("min_contact_px", "Min visible drop pixels (px)", 0, 1000, 1,
-              "Minimum number of detected pixels above the substrate for an object to be considered a drop. Increase to reject tiny specks; too high may lose small drops."),
+              "Candidate-search depth vertically below the substrate line. Final reported area is clipped to the gas side; this does not move the substrate line."),
+    Parameter("min_contact_px", "Min gas-side area (px2)", 0, 1000, 1,
+              "Minimum total detected area on or above the surface for a selected component. Applies to detached drops too; it is not a contact-line width. CLI: --min-gas-area-px2."),
     Parameter("surface_y_px", "Surface center y (px)", 0, 2048, 1,
               "Position (y-coordinate) of the substrate line at the image center. Larger values move it downward. Auto uses the detected line.", True),
     Parameter("surface_angle_deg", "Surface tilt (deg)", -45, 45, 0.1,
@@ -574,14 +574,14 @@ class DropletApp:
         surface_group = self.groups["Substrate and width measurement"].body
         row = ttk.Frame(surface_group)
         row.pack(fill="x", pady=(8, 0))
-        ttk.Label(row, text="Reflection mode").pack(side="left")
+        ttk.Label(row, text="Surface calibration method").pack(side="left")
         ttk.Button(row, text="Reset", width=6,
                    command=lambda: self.reset_choice("reflection_mode")).pack(side="right")
         self.reflection_combo = ttk.Combobox(surface_group, textvariable=self.reflection,
                              values=("auto", "mirror", "none"), state="readonly")
         self.reflection_combo.pack(fill="x")
         self.reflection_combo.bind("<<ComboboxSelected>>", lambda _: self.schedule_preview())
-        responsive_label(surface_group, text="How to locate the substrate: mirror uses the drop and its reflection; none uses the drop's lower edge. Choose none if the reflection is faint. Auto selects a method.").pack(fill="x", pady=4)
+        responsive_label(surface_group, text="How to locate the substrate: mirror uses reflection symmetry; none uses the drop's lower edge without mirror symmetry. Auto selects a method. This does not switch shadow suppression on or off.").pack(fill="x", pady=4)
         row = ttk.Frame(surface_group)
         row.pack(fill="x", pady=(8, 0))
         ttk.Checkbutton(row, text="Rim-to-rim width",
@@ -592,11 +592,11 @@ class DropletApp:
         liquid_group = self.groups["Liquid detection"].body
         row = ttk.Frame(liquid_group)
         row.pack(fill="x", pady=(8, 0))
-        ttk.Checkbutton(row, text="Suppress near-surface shadow",
+        ttk.Checkbutton(row, text="Approach / onset shadow guard",
                         variable=self.shadow_suppression, command=self.schedule_preview).pack(side="left")
         ttk.Button(row, text="Reset", width=6,
                    command=lambda: self.reset_choice("shadow_suppression")).pack(side="right")
-        responsive_label(liquid_group, text="Use the drop contour and two preceding frames to limit shadows before and at initial contact. Sharp thin sheets and deformed drops retain faint-liquid growth. Check contact-onset warnings.").pack(fill="x", pady=4)
+        responsive_label(liquid_group, text="Limit shadows during approach and initial contact using contour and preceding-frame evidence. This does not resolve contact during recoil or lift-off; ambiguous deformed drops retain their candidate outline and a review warning.").pack(fill="x", pady=4)
         right = ttk.Frame(content, padding=(12, 0, 0, 0))
         content.add(right, weight=1)
         self.preview_panel = ttk.Frame(right)
