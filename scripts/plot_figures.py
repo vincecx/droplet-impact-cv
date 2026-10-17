@@ -108,7 +108,7 @@ class RunData:
     pixel_mm_per_px: float | None
     impact_frame: float | None
     surface_angle_deg: float | None
-    # experimental conditions (recorded from package 0.4.0 onward)
+    # Experimental conditions recorded in run parameters.
     substrate: str | None = None
     hydrophilicity: str | None = None
     substrate_temp_deg_c: float | None = None

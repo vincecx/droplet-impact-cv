@@ -11,32 +11,41 @@ from unittest.mock import patch
 from droplet_impact_cv.cli import PROJECT_DIR, build_parser, config_from_args, default_output_dir, main, parse_args
 from droplet_impact_cv.models import (
     FrameMeasurement,
-    DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
     DEFAULT_PIXEL_SIZE_MM_PER_PX,
 )
 
 
 class CliConfigTests(unittest.TestCase):
-    def test_gas_area_name_retains_legacy_alias_and_cli_precedence(self):
+    def test_gas_area_config_and_cli_precedence(self):
         parser = build_parser()
-        for option in ("--min-gas-area-px2", "--min-contact-px"):
-            self.assertEqual(config_from_args(parser.parse_args([option, "42"])).min_contact_px, 42)
+        self.assertEqual(config_from_args(parser.parse_args(["--min-gas-area-px2", "42"])).min_gas_area_px2, 42)
         with TemporaryDirectory() as temporary_dir:
             folder = Path(temporary_dir)
-            (folder / "cv_config.txt").write_text('--min-contact-px 30\n', encoding="utf-8")
+            (folder / "cv_config.txt").write_text('--min-gas-area-px2 30\n', encoding="utf-8")
             config = config_from_args(parse_args([str(folder), "--min-gas-area-px2", "42"]))
-            self.assertEqual(config.min_contact_px, 42)
+            self.assertEqual(config.min_gas_area_px2, 42)
             (folder / "cv_config.txt").write_text('--min-gas-area-px2 42\n', encoding="utf-8")
-            config = config_from_args(parse_args([str(folder), "--min-contact-px", "30"]))
-            self.assertEqual(config.min_contact_px, 30)
+            config = config_from_args(parse_args([str(folder), "--min-gas-area-px2", "30"]))
+            self.assertEqual(config.min_gas_area_px2, 30)
 
-    def test_shadow_suppression_config_and_cli_override(self):
-        self.assertTrue(config_from_args(build_parser().parse_args([])).shadow_suppression)
+    def test_superseded_parameter_names_are_rejected(self):
+        options = ["--min-contact-px", "--weak-reach-px", "--surface-band-px",
+                   "--reflection-mode", "--shadow-suppression", "--no-shadow-suppression",
+                   "--min-droplet-area-px2", "--min-strong-threshold",
+                   "--strong-threshold", "--weak-threshold", "--weak-threshold-ratio"]
+        for option in options:
+            arguments = [option] if "shadow-suppression" in option else [option, "1"]
+            with self.subTest(option=option), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                build_parser().parse_args(arguments)
+
+    def test_approach_shadow_guard_config_and_cli_override(self):
+        self.assertTrue(config_from_args(build_parser().parse_args([])).approach_shadow_guard)
         with TemporaryDirectory() as temporary_dir:
             folder = Path(temporary_dir)
-            (folder / "cv_config.txt").write_text('--no-shadow-suppression\n', encoding="utf-8")
-            self.assertFalse(config_from_args(parse_args([str(folder)])).shadow_suppression)
-            self.assertTrue(config_from_args(parse_args([str(folder), "--shadow-suppression"])).shadow_suppression)
+            (folder / "cv_config.txt").write_text('--no-approach-shadow-guard\n', encoding="utf-8")
+            self.assertFalse(config_from_args(parse_args([str(folder)])).approach_shadow_guard)
+            self.assertTrue(config_from_args(parse_args([str(folder), "--approach-shadow-guard"])).approach_shadow_guard)
 
     def test_short_output_option_selects_directory_in_cli_and_folder_config(self):
         # A CSV-looking argument is still a directory; -o has no CSV alias.
@@ -125,7 +134,7 @@ class CliConfigTests(unittest.TestCase):
                       "--substrate_temp_deg_c", "-5.5", "--rim-to-rim", "0"])
             payload = json.loads((output_csv.parent / "run_params.json").read_text(encoding="utf-8"))
             params = payload["parameters"]
-            self.assertEqual(payload["package_version"], "0.4.0")
+            self.assertEqual(payload["package_version"], "0.5")
             self.assertEqual(params["input_dir"], str(folder))
             self.assertEqual(params["substrate"], "Other surface")
             self.assertEqual(params["hydrophilicity"], "HI")
@@ -204,7 +213,7 @@ class CliConfigTests(unittest.TestCase):
             folder = Path(temporary_dir)
             defaults = config_from_args(parse_args([str(folder)]))
             self.assertEqual(defaults.mirror_min_depth_px, 50)
-            self.assertEqual(defaults.weak_threshold_ratio, 0.3)
+            self.assertEqual(defaults.weak_change_threshold_ratio, 0.3)
             (folder / "cv_config.txt").write_text("--mirror-min-depth-px 25\n", encoding="utf-8")
             self.assertEqual(config_from_args(parse_args([str(folder)])).mirror_min_depth_px, 25)
             self.assertEqual(config_from_args(parse_args([str(folder), "--mirror-min-depth-px", "0"])).mirror_min_depth_px, 0)
@@ -235,7 +244,7 @@ class CliConfigTests(unittest.TestCase):
                 "--fps 4000\n"
                 "--pixel-size-mm-per-px 0.01682736321\n"
                 "--surface-calibration-frame 9105\n"
-                "--reflection-mode none\n",
+                "--surface-calibration-method none\n",
                 encoding="utf-8",
             )
 
@@ -244,8 +253,8 @@ class CliConfigTests(unittest.TestCase):
         self.assertEqual(config.fps, 4000.0)
         self.assertEqual(config.pixel_size_mm_per_px, 0.01682736321)
         self.assertEqual(config.surface_calibration_frame, 9105)
-        self.assertEqual(config.reflection_mode, "none")
-        self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
+        self.assertEqual(config.surface_calibration_method, "none")
+        self.assertEqual(config.min_strong_change_threshold, DEFAULT_MIN_STRONG_CHANGE_THRESHOLD)
 
     def test_command_line_overrides_input_folder_config(self) -> None:
         with TemporaryDirectory() as temporary_dir:
@@ -279,7 +288,7 @@ class CliConfigTests(unittest.TestCase):
         self.assertEqual(config.fps, 1000.0)
         self.assertEqual(config.pixel_size_mm_per_px, DEFAULT_PIXEL_SIZE_MM_PER_PX)
         self.assertEqual(config.pixel_size_mm_per_px, 0.01)
-        self.assertEqual(config.surface_band_px, 1)
+        self.assertEqual(config.contact_band_half_height_px, 1)
         self.assertFalse(config.include_pre_impact)
 
     def test_input_specific_default_output_paths(self) -> None:
@@ -325,8 +334,8 @@ class CliConfigTests(unittest.TestCase):
 
     def test_default_auto_threshold_floor_allows_faint_liquid(self) -> None:
         config = config_from_args(build_parser().parse_args([]))
-        self.assertEqual(config.min_strong_threshold, DEFAULT_MIN_STRONG_THRESHOLD)
-        self.assertEqual(config.min_strong_threshold, 200.0)
+        self.assertEqual(config.min_strong_change_threshold, DEFAULT_MIN_STRONG_CHANGE_THRESHOLD)
+        self.assertEqual(config.min_strong_change_threshold, 200.0)
 
     def test_surface_angle_is_automatic_unless_explicitly_overridden(self) -> None:
         parser = build_parser()
@@ -346,21 +355,21 @@ class CliConfigTests(unittest.TestCase):
                 [
                     "--surface-y-px",
                     "800",
-                    "--strong-threshold",
+                    "--strong-change-threshold",
                     "1800",
-                    "--weak-threshold",
+                    "--weak-change-threshold",
                     "450",
-                    "--weak-threshold-ratio",
+                    "--weak-change-threshold-ratio",
                     "0.3",
-                    "--weak-reach-px",
+                    "--weak-growth-steps",
                     "32",
-                    "--min-strong-threshold",
+                    "--min-strong-change-threshold",
                     "1200",
-                    "--min-droplet-area-px2",
+                    "--min-component-area-px2",
                     "300",
                     "--foreground-depth-px",
                     "200",
-                    "--min-contact-px",
+                    "--min-gas-area-px2",
                     "25",
                     "--debug-interval",
                     "5",
@@ -369,31 +378,31 @@ class CliConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(config.surface_y_px, 800)
-        self.assertEqual(config.strong_threshold, 1800.0)
-        self.assertEqual(config.weak_threshold, 450.0)
-        self.assertEqual(config.weak_threshold_ratio, 0.3)
-        self.assertEqual(config.weak_reach_px, 32)
-        self.assertEqual(config.min_strong_threshold, 1200.0)
-        self.assertEqual(config.min_droplet_area_px2, 300)
+        self.assertEqual(config.strong_change_threshold, 1800.0)
+        self.assertEqual(config.weak_change_threshold, 450.0)
+        self.assertEqual(config.weak_change_threshold_ratio, 0.3)
+        self.assertEqual(config.weak_growth_steps, 32)
+        self.assertEqual(config.min_strong_change_threshold, 1200.0)
+        self.assertEqual(config.min_component_area_px2, 300)
         self.assertEqual(config.foreground_depth_px, 200)
-        self.assertEqual(config.min_contact_px, 25)
+        self.assertEqual(config.min_gas_area_px2, 25)
         self.assertEqual(config.debug_interval, 5)
 
     def test_canonical_unit_names_map_to_analysis_config(self) -> None:
         config = config_from_args(build_parser().parse_args([
-            "--pixel-size-mm-per-px", "0.01", "--min-droplet-area-px2", "400",
-            "--min-contact-px", "20", "--rim-to-rim", "1",
+            "--pixel-size-mm-per-px", "0.01", "--min-component-area-px2", "400",
+            "--min-gas-area-px2", "20", "--rim-to-rim", "1",
         ]))
         self.assertEqual(config.pixel_size_mm_per_px, 0.01)
-        self.assertEqual(config.min_droplet_area_px2, 400)
-        self.assertEqual(config.min_contact_px, 20)
+        self.assertEqual(config.min_component_area_px2, 400)
+        self.assertEqual(config.min_gas_area_px2, 20)
         self.assertTrue(config.rim_to_rim)
 
     def test_old_config_options_are_rejected_even_with_current_cli_overrides(self) -> None:
         options = (
             ("--pixel-size-mm", "--pixel-size-mm-per-px"),
-            ("--min-droplet-area-px", "--min-droplet-area-px2"),
-            ("--min-contact-pixels", "--min-contact-px"),
+            ("--min-droplet-area-px", "--min-component-area-px2"),
+            ("--min-contact-pixels", "--min-gas-area-px2"),
             ("--HO", "--rim-to-rim"),
             ("--hydrophobic", "--rim-to-rim"),
         )
@@ -438,7 +447,7 @@ class CliConfigTests(unittest.TestCase):
             "--surface-y",
             "--surface-frame",
             "--threshold",
-            "--weak-threshold-fraction",
+            "--weak-change-threshold-fraction",
             "--weak-propagation-px",
             "--min-foreground-delta",
             "--min-area-px",
@@ -461,19 +470,19 @@ class CliConfigTests(unittest.TestCase):
                 with self.assertRaises(SystemExit):
                     parser.parse_args([option, "1"])
 
-    def test_command_line_overrides_configured_reflection_mode(self) -> None:
+    def test_command_line_overrides_configured_surface_calibration_method(self) -> None:
         with TemporaryDirectory() as temporary_dir:
             input_dir = Path(temporary_dir)
             (input_dir / "cv_config.txt").write_text(
-                "--reflection-mode mirror\n",
+                "--surface-calibration-method mirror\n",
                 encoding="utf-8",
             )
 
             config = config_from_args(
-                parse_args([str(input_dir), "--reflection-mode", "none"])
+                parse_args([str(input_dir), "--surface-calibration-method", "none"])
             )
 
-        self.assertEqual(config.reflection_mode, "none")
+        self.assertEqual(config.surface_calibration_method, "none")
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ class AutoCalibrationTests(unittest.TestCase):
         self.background = np.full((120, 120), 4000, dtype=np.float32)
         self.config = AnalysisConfig(
             Path("synthetic"), Path("out.csv"), top_exclusion_ratio=0,
-            min_droplet_area_px2=20, min_contact_px=5, min_impact_width_px=10,
+            min_component_area_px2=20, min_gas_area_px2=5, min_impact_width_px=10,
             morphology_radius_px=1,
         )
 
@@ -113,7 +113,7 @@ class AutoCalibrationTests(unittest.TestCase):
         self.assertEqual(prepared.threshold_sample_frames[-1], 200)
         self.assertFalse(prepared.surface_is_calibrated)
         with patch("droplet_impact_cv.analysis.threshold_sampling_anchor") as scan:
-            manual = prepare_sequence(replace(self.config, strong_threshold=450), files, self.background)
+            manual = prepare_sequence(replace(self.config, strong_change_threshold=450), files, self.background)
         scan.assert_not_called()
         self.assertEqual(manual.threshold, 450)
         self.assertEqual(manual.threshold_sample_frames, ())
@@ -122,7 +122,7 @@ class AutoCalibrationTests(unittest.TestCase):
         files, reader = self.files_and_reader([self.background, self.ellipse()])
         config = replace(
             self.config, surface_calibration_frame=20, surface_y_px=70,
-            surface_angle_deg=-1, reflection_mode="none", strong_threshold=450,
+            surface_angle_deg=-1, surface_calibration_method="none", strong_change_threshold=450,
         )
         with patch("droplet_impact_cv.imaging.read_image", side_effect=reader), patch(
             "droplet_impact_cv.analysis.estimate_surface_line_from_nonreflection_frame",

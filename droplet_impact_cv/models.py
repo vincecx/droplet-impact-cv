@@ -10,16 +10,16 @@ import numpy as np
 DEFAULT_FPS = 1000.0
 DEFAULT_PIXEL_SIZE_MM_PER_PX = 0.01
 DEFAULT_SURFACE_ANGLE_DEG = 0.0
-DEFAULT_MIN_STRONG_THRESHOLD = 200.0
+DEFAULT_MIN_STRONG_CHANGE_THRESHOLD = 200.0
 DEFAULT_THRESHOLD_SAMPLE_FRAMES = 8
 DEFAULT_THRESHOLD_PRE_IMPACT_FRAMES = 2
 DEFAULT_THRESHOLD_POST_IMPACT_FRAMES = 7
-DEFAULT_SURFACE_BAND_PX = 1
-DEFAULT_WEAK_REACH_PX = 40
-DEFAULT_WEAK_THRESHOLD_RATIO = 0.3
+DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX = 1
+DEFAULT_WEAK_GROWTH_STEPS = 40
+DEFAULT_WEAK_CHANGE_THRESHOLD_RATIO = 0.3
 DEFAULT_MIRROR_MIN_DEPTH_PX = 50
 DEFAULT_TOP_EXCLUSION_RATIO = 0.25
-REFLECTION_MODES = ("auto", "mirror", "none")
+SURFACE_CALIBRATION_METHODS = ("auto", "mirror", "none")
 OUTPUT_CSV_FILENAME = "cv_output.csv"
 
 # Shared serialization order: locations, experiment, range, substrate,
@@ -29,12 +29,12 @@ CONFIG_PARAMETER_ORDER = (
     "substrate", "hydrophilicity", "substrate_temp_deg_c",
     "fps", "pixel_size_mm_per_px", "start_frame", "end_frame",
     "droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px",
-    "surface_angle_deg", "reflection_mode", "mirror_min_depth_px",
+    "surface_angle_deg", "surface_calibration_method", "mirror_min_depth_px",
     "surface_search_start_px", "surface_drop_delta",
-    "top_exclusion_ratio", "strong_threshold", "weak_threshold", "shadow_suppression",
-    "min_strong_threshold", "weak_threshold_ratio", "weak_reach_px",
-    "min_droplet_area_px2", "morphology_radius_px", "foreground_depth_px",
-    "surface_band_px", "rim_to_rim", "min_contact_px", "min_impact_width_px",
+    "top_exclusion_ratio", "strong_change_threshold", "weak_change_threshold", "approach_shadow_guard",
+    "min_strong_change_threshold", "weak_change_threshold_ratio", "weak_growth_steps",
+    "min_component_area_px2", "morphology_radius_px", "foreground_depth_px",
+    "contact_band_half_height_px", "rim_to_rim", "min_gas_area_px2", "min_impact_width_px",
     "include_pre_impact", "time_zero", "debug_interval",
 )
 
@@ -49,23 +49,23 @@ class AnalysisConfig:
     surface_calibration_frame: int | None = None
     droplet_size_ref_frame: int | None = None
     surface_angle_deg: float | None = None
-    reflection_mode: str = "auto"
+    surface_calibration_method: str = "auto"
     mirror_min_depth_px: int = DEFAULT_MIRROR_MIN_DEPTH_PX
-    strong_threshold: float | None = None
-    weak_threshold: float | None = None
-    weak_threshold_ratio: float = DEFAULT_WEAK_THRESHOLD_RATIO
-    weak_reach_px: int = DEFAULT_WEAK_REACH_PX
-    shadow_suppression: bool = True
-    min_strong_threshold: float = DEFAULT_MIN_STRONG_THRESHOLD
-    min_droplet_area_px2: int = 250
+    strong_change_threshold: float | None = None
+    weak_change_threshold: float | None = None
+    weak_change_threshold_ratio: float = DEFAULT_WEAK_CHANGE_THRESHOLD_RATIO
+    weak_growth_steps: int = DEFAULT_WEAK_GROWTH_STEPS
+    approach_shadow_guard: bool = True
+    min_strong_change_threshold: float = DEFAULT_MIN_STRONG_CHANGE_THRESHOLD
+    min_component_area_px2: int = 250
     morphology_radius_px: int = 3
     surface_search_start_px: int = 50
     surface_drop_delta: float = 100.0
-    surface_band_px: int = DEFAULT_SURFACE_BAND_PX
+    contact_band_half_height_px: int = DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX
     rim_to_rim: bool = False
     foreground_depth_px: int = 220
     top_exclusion_ratio: float = DEFAULT_TOP_EXCLUSION_RATIO
-    min_contact_px: int = 30  # Legacy field name: total gas-side area in px2, not contact width.
+    min_gas_area_px2: int = 30
     min_impact_width_px: int = 30
     include_pre_impact: bool = False
     time_zero: str = "impact"

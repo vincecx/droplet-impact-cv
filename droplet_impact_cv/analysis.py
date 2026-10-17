@@ -11,7 +11,7 @@ from .imaging import (
     build_background,
     calibration_target_center_x,
     component_measurement,
-    detect_reflection_mode_from_frame,
+    detect_surface_calibration_method_from_frame,
     estimate_surface_y,
     estimate_surface_line_from_nonreflection_frame,
     estimate_surface_line_from_symmetry_frame,
@@ -39,10 +39,10 @@ from .models import (
 from .visualization import clear_debug_overlays, write_debug_overlay
 
 
-def resolve_weak_threshold(config: AnalysisConfig, threshold: float) -> float:
-    if config.weak_threshold is not None:
-        return float(config.weak_threshold)
-    return threshold * config.weak_threshold_ratio
+def resolve_weak_change_threshold(config: AnalysisConfig, threshold: float) -> float:
+    if config.weak_change_threshold is not None:
+        return float(config.weak_change_threshold)
+    return threshold * config.weak_change_threshold_ratio
 
 
 def select_sequence_files(config: AnalysisConfig) -> list[Path]:
@@ -85,7 +85,7 @@ class PreparedSequence:
     background: np.ndarray
     surface_line: SurfaceLine
     threshold: float
-    weak_threshold: float
+    weak_change_threshold: float
     structure: np.ndarray
     target_center_x: float | None
     threshold_anchor_frame: int | None = None
@@ -95,7 +95,7 @@ class PreparedSequence:
 
     def _model_key(self, path: Path) -> tuple:
         # Include settings so dataclasses.replace cannot reuse stale evidence.
-        return path, self.config, self.threshold, self.weak_threshold, self.surface_line, self.target_center_x
+        return path, self.config, self.threshold, self.weak_change_threshold, self.surface_line, self.target_center_x
 
     def _previous_models(self, path: Path) -> tuple[FreeDropModel, ...]:
         index = self.files.index(path)
@@ -122,11 +122,11 @@ class PreparedSequence:
     def measure(self, file_path: Path) -> tuple[np.ndarray, ComponentMeasurement]:
         image = read_image(file_path)
         previous = ()
-        if self.config.shadow_suppression and self.config.weak_reach_px > 0 and self.weak_threshold < self.threshold:
+        if self.config.approach_shadow_guard and self.config.weak_growth_steps > 0 and self.weak_change_threshold < self.threshold:
             previous = self._previous_models(file_path)
         segmentation = foreground_segmentation(
             image, self.background, self.surface_line, self.threshold,
-            self.config, self.structure, weak_threshold=self.weak_threshold,
+            self.config, self.structure, weak_change_threshold=self.weak_change_threshold,
             frame_number=frame_number_from_filename(file_path),
             previous_models=previous, preferred_center_x=self.target_center_x,
         )
@@ -167,22 +167,22 @@ def prepare_sequence(
     )
     structure = make_structure(config.morphology_radius_px)
     preliminary_threshold = (
-        float(config.strong_threshold)
-        if config.strong_threshold is not None
+        float(config.strong_change_threshold)
+        if config.strong_change_threshold is not None
         else estimate_threshold(
             files,
             background,
             coarse_surface_y,
             DEFAULT_THRESHOLD_SAMPLE_FRAMES,
-            config.min_strong_threshold,
+            config.min_strong_change_threshold,
         )
     )
-    preliminary_weak_threshold = resolve_weak_threshold(config, preliminary_threshold)
+    preliminary_weak_change_threshold = resolve_weak_change_threshold(config, preliminary_threshold)
     calibrated_surface_line: SurfaceLine | None = None
-    resolved_reflection_mode = config.reflection_mode
+    resolved_surface_calibration_method = config.surface_calibration_method
     if config.surface_calibration_frame is not None:
-        if resolved_reflection_mode == "auto":
-            resolved_reflection_mode = detect_reflection_mode_from_frame(
+        if resolved_surface_calibration_method == "auto":
+            resolved_surface_calibration_method = detect_surface_calibration_method_from_frame(
                 files,
                 background,
                 config.surface_calibration_frame,
@@ -190,13 +190,13 @@ def prepare_sequence(
                 coarse_surface_y,
                 config,
                 structure,
-                weak_threshold=preliminary_weak_threshold,
+                weak_change_threshold=preliminary_weak_change_threshold,
             )
         if config.surface_y_px is not None and config.surface_angle_deg is not None:
             # A complete manual line must not depend on successful silhouette
             # calibration. The selected frame can still identify the target.
             calibrated_surface_line = SurfaceLine(config.surface_y_px, config.surface_angle_deg)
-        elif resolved_reflection_mode == "mirror":
+        elif resolved_surface_calibration_method == "mirror":
             calibrated_surface_line = estimate_surface_line_from_symmetry_frame(
                 files,
                 background,
@@ -206,7 +206,7 @@ def prepare_sequence(
                 config,
                 structure,
                 angle_override_deg=config.surface_angle_deg,
-                weak_threshold=preliminary_weak_threshold,
+                weak_change_threshold=preliminary_weak_change_threshold,
             )
         else:
             calibrated_surface_line = estimate_surface_line_from_nonreflection_frame(
@@ -217,14 +217,14 @@ def prepare_sequence(
                 config,
                 structure,
                 angle_override_deg=config.surface_angle_deg,
-                weak_threshold=preliminary_weak_threshold,
+                weak_change_threshold=preliminary_weak_change_threshold,
             )
-    elif resolved_reflection_mode == "auto":
+    elif resolved_surface_calibration_method == "auto":
         # Without a calibration frame there is no silhouette evidence to
         # classify, so mirror mode is assumed.
-        resolved_reflection_mode = "mirror"
+        resolved_surface_calibration_method = "mirror"
 
-    effective_config = replace(config, reflection_mode=resolved_reflection_mode)
+    effective_config = replace(config, surface_calibration_method=resolved_surface_calibration_method)
     target_center_x = (
         calibration_target_center_x(
             files,
@@ -234,8 +234,8 @@ def prepare_sequence(
             coarse_surface_y,
             config,
             structure,
-            resolved_reflection_mode,
-            weak_threshold=preliminary_weak_threshold,
+            resolved_surface_calibration_method,
+            weak_change_threshold=preliminary_weak_change_threshold,
         )
         if config.surface_calibration_frame is not None
         else None
@@ -261,10 +261,10 @@ def prepare_sequence(
     sampling_method = "manual"
     sample_files: list[Path] = []
     threshold = preliminary_threshold
-    if config.strong_threshold is None:
+    if config.strong_change_threshold is None:
         anchor_index, sampling_method = threshold_sampling_anchor(
             files, background, surface_line, preliminary_threshold,
-            preliminary_weak_threshold, effective_config, structure,
+            preliminary_weak_change_threshold, effective_config, structure,
             config.surface_y_px is not None or calibrated_surface_line is not None,
             target_center_x,
         )
@@ -280,12 +280,12 @@ def prepare_sequence(
             ]
         threshold = estimate_threshold(
             sample_files, background, surface_line.center_y_int(), len(sample_files),
-            config.min_strong_threshold, surface_line=surface_line,
+            config.min_strong_change_threshold, surface_line=surface_line,
         )
-    weak_threshold = resolve_weak_threshold(config, threshold)
+    weak_change_threshold = resolve_weak_change_threshold(config, threshold)
     return PreparedSequence(
         effective_config, files, background, surface_line, threshold,
-        weak_threshold, structure, target_center_x,
+        weak_change_threshold, structure, target_center_x,
         frame_number_from_filename(files[anchor_index]) if anchor_index is not None else None,
         sampling_method, tuple(frame_number_from_filename(path) for path in sample_files),
     )

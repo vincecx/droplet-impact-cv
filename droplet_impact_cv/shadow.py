@@ -100,7 +100,7 @@ def has_consistent_history(current: FreeDropModel, previous: tuple[FreeDropModel
 def constrain_shadow_fringe(
     candidate: np.ndarray, core: np.ndarray, model: FreeDropModel,
     previous: tuple[FreeDropModel, ...], band_px: int,
-    image: np.ndarray, background: np.ndarray, weak_threshold: float,
+    image: np.ndarray, background: np.ndarray, weak_change_threshold: float,
     surface: SurfaceLine,
 ) -> tuple[np.ndarray, int]:
     """Trim an anomalous lower fringe before or at initial surface contact.
@@ -153,7 +153,7 @@ def constrain_shadow_fringe(
             return candidate, 0
         change = ndi.gaussian_filter(background - image, 1.0)
         gradient = np.hypot(ndi.sobel(change, 0) / 8, ndi.sobel(change, 1) / 8)
-        sharpness = gradient / (np.abs(change) + weak_threshold)
+        sharpness = gradient / (np.abs(change) + weak_change_threshold)
         # A normalized transition scale under four pixels is evidence of a real
         # thin sheet. Decline shape correction rather than erasing that edge.
         if float(np.median(sharpness[outer_edge])) >= 1.0 / MIN_DIFFUSE_EDGE_SCALE_PX:

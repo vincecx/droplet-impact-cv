@@ -56,9 +56,9 @@ class PreviewTests(unittest.TestCase):
         self.folder.mkdir()
         self.config_file = self.folder / "cv_config.txt"
         self.config_file.write_text(
-            "--fps 4000\n--strong-threshold 1000\n--weak-threshold 500\n"
+            "--fps 4000\n--strong-change-threshold 1000\n--weak-change-threshold 500\n"
             "--surface-y-px 80\n--surface-angle-deg 0\n"
-            "--min-droplet-area-px2 1\n--min-contact-px 1\n"
+            "--min-component-area-px2 1\n--min-gas-area-px2 1\n"
             "--morphology-radius-px 0\n--include-pre-impact\n",
             encoding="utf-8",
         )
@@ -74,10 +74,10 @@ class PreviewTests(unittest.TestCase):
         with patch.object(sys, "argv", ["gui", "--fps", "999"]):
             config = load_folder_config(self.folder)
         self.assertEqual(config.fps, 4000)
-        self.assertEqual(config.weak_reach_px, 40)
+        self.assertEqual(config.weak_growth_steps, 40)
 
     def test_top_exclusion_preserves_background_calibration_and_matches_batch(self):
-        config = replace(load_folder_config(self.folder), surface_calibration_frame=5, reflection_mode="none")
+        config = replace(load_folder_config(self.folder), surface_calibration_frame=5, surface_calibration_method="none")
         full = prepare_sequence(replace(config, top_exclusion_ratio=0))
         excluded = prepare_sequence(replace(config, top_exclusion_ratio=1))
         np.testing.assert_array_equal(full.background, excluded.background)
@@ -168,9 +168,9 @@ class PreviewTests(unittest.TestCase):
 
     def test_save_round_trip_preserves_auto_paths_flags_and_frame_range(self):
         config = replace(
-            load_folder_config(self.folder), fps=1234.5, rim_to_rim=True, shadow_suppression=False,
+            load_folder_config(self.folder), fps=1234.5, rim_to_rim=True, approach_shadow_guard=False,
             substrate="Al surface 名称", hydrophilicity="SHO", substrate_temp_deg_c=24.5,
-            strong_threshold=None, weak_threshold=None, surface_y_px=None,
+            strong_change_threshold=None, weak_change_threshold=None, surface_y_px=None,
             surface_angle_deg=-1.25, surface_calibration_frame=None,
             droplet_size_ref_frame=3, start_frame=2, end_frame=5, top_exclusion_ratio=0.4,
             output_csv=self.folder / "output's folder" / "result.csv",
@@ -186,7 +186,7 @@ class PreviewTests(unittest.TestCase):
         with self.config_file.open("a", encoding="utf-8") as handle:
             handle.write('--substrate "Al surface"\n--hydrophilicity SHO\n--substrate_temp_deg_c 24\n')
         session = PreviewSession.open(self.folder)
-        session.preview(1, {"strong_threshold": 1100, "rim_to_rim": True})
+        session.preview(1, {"strong_change_threshold": 1100, "rim_to_rim": True})
         self.assertEqual(session.prepared.config.substrate, "Al surface")
         self.assertEqual(session.prepared.config.hydrophilicity, "SHO")
         self.assertEqual(session.prepared.config.substrate_temp_deg_c, 24.0)
@@ -241,15 +241,15 @@ class PreviewTests(unittest.TestCase):
     def test_manual_recalibration_refreshes_reference_and_matches_batch(self):
         session = PreviewSession.open(self.folder)
         overrides = {"surface_y_px": 60, "surface_angle_deg": 0,
-                     "strong_threshold": None, "weak_threshold": None,
-                     "min_strong_threshold": 1000}
+                     "strong_change_threshold": None, "weak_change_threshold": None,
+                     "min_strong_change_threshold": 1000}
         session.preview(4, overrides, recalibrate=True)
         rows = analyze_sequence(replace(session.base_config, **overrides, debug_dir=None))
         self.assertEqual(session.droplet_size_ref_frame, rows[0].droplet_size_ref_frame)
         self.assertNotEqual(session.droplet_size_ref_frame, 4)
         expected = prepare_sequence(replace(session.base_config, **overrides))
         self.assertEqual(session.prepared.threshold, expected.threshold)
-        self.assertEqual(session.prepared.weak_threshold, expected.weak_threshold)
+        self.assertEqual(session.prepared.weak_change_threshold, expected.weak_change_threshold)
         # Confirming the same line must also rerun automatic discovery.
         session.droplet_size_ref_frame = 999
         with patch("droplet_impact_cv.gui.prepare_sequence", wraps=prepare_sequence) as prepare:
@@ -323,7 +323,7 @@ class PreviewTests(unittest.TestCase):
         session.base_config = replace(session.base_config, debug_dir=debug_dir)
         _, baseline = session.prepared.measure(session.prepared.files[3])
         self.assertEqual(baseline.area_px2, 1200)
-        overrides = {"strong_threshold": 2500.0}
+        overrides = {"strong_change_threshold": 2500.0}
         before, after, _ = session.preview(3, overrides)
         self.assertEqual(self.config_file.read_bytes(), original)
         self.assertEqual(stale.read_bytes(), b"keep during preview")
@@ -393,7 +393,7 @@ class GuiControlTests(unittest.TestCase):
             self.assertEqual(backup.read_bytes(), original)
 
     def test_disabled_slider_tracks_loaded_auto_values_and_reset(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_change_threshold")
         control = ParameterControl(self.root, spec, lambda: None)
         control.slider.configure(state="disabled")
         control.set_value(None, 1500.0)
@@ -408,7 +408,7 @@ class GuiControlTests(unittest.TestCase):
         self.assertEqual(str(control.slider["state"]), "normal")
 
     def test_initial_values_preserve_precision_and_auto(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_change_threshold")
         control = ParameterControl(self.root, spec, lambda: None)
         value = 1234.56789012345
         control.set_value(value, value)
@@ -418,7 +418,7 @@ class GuiControlTests(unittest.TestCase):
         self.assertEqual(str(control.entry["state"]), "disabled")
 
     def test_entry_updates_slider_and_invalid_values_block_processing(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "weak_reach_px")
+        spec = next(spec for spec in PARAMETERS if spec.name == "weak_growth_steps")
         control = ParameterControl(self.root, spec, lambda: None)
         control.set_value(40, 40)
         control.value.set("500")
@@ -430,7 +430,7 @@ class GuiControlTests(unittest.TestCase):
             control.get_value()
 
     def test_slider_track_click_jumps_to_position_and_preserves_thumb_drag(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "weak_reach_px")
+        spec = next(spec for spec in PARAMETERS if spec.name == "weak_growth_steps")
         changes = []
         control = ParameterControl(self.root, spec, lambda: changes.append(control.get_value()))
         control.pack(fill="x")
@@ -460,7 +460,7 @@ class GuiControlTests(unittest.TestCase):
         self.assertLess(control.get_value(), spec.high)
 
     def test_slider_track_click_ignores_auto_and_disabled_controls(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_change_threshold")
         changes = []
         control = ParameterControl(self.root, spec, lambda: changes.append(True))
         control.pack(fill="x")
@@ -477,7 +477,7 @@ class GuiControlTests(unittest.TestCase):
         self.assertFalse(changes)
 
     def test_ratio_accepts_small_positive_values_and_rejects_nonfinite(self):
-        spec = next(spec for spec in PARAMETERS if spec.name == "weak_threshold_ratio")
+        spec = next(spec for spec in PARAMETERS if spec.name == "weak_change_threshold_ratio")
         control = ParameterControl(self.root, spec, lambda: None)
         control.set_value(0.00001, 0.00001)
         self.assertEqual(control.get_value(), 0.00001)
@@ -499,7 +499,7 @@ class GuiControlTests(unittest.TestCase):
 
     def test_individual_reset_restores_value_and_auto_without_changing_baseline(self):
         changed = []
-        spec = next(spec for spec in PARAMETERS if spec.name == "strong_threshold")
+        spec = next(spec for spec in PARAMETERS if spec.name == "strong_change_threshold")
         control = ParameterControl(self.root, spec, lambda: changed.append(True))
         control.set_value(None, 1500.0)
         control.auto.set(False)
@@ -702,14 +702,14 @@ class GuiWorkflowTests(unittest.TestCase):
             self.assertEqual(app.batch_config().output_csv.parent, self.folder / "CV_postprocessing")
             app.frame_slider.set(4)
             pump(lambda: "frame000005.tif" in app.details.get() and app.status.get().startswith("Ready."))
-            app.controls["weak_reach_px"].value.set("bad")
+            app.controls["weak_growth_steps"].value.set("bad")
             self.assertEqual(str(app.process["state"]), "disabled")
-            app.controls["weak_reach_px"].value.set("50")
+            app.controls["weak_growth_steps"].value.set("50")
             pump(lambda: app.status.get().startswith("Ready."))
-            self.assertEqual(app.overrides()["weak_reach_px"], 50)
+            self.assertEqual(app.overrides()["weak_growth_steps"], 50)
             app.reset_parameters()
             pump(lambda: app.status.get().startswith("Ready."))
-            self.assertEqual(app.overrides()["weak_reach_px"], 40)
+            self.assertEqual(app.overrides()["weak_growth_steps"], 40)
             app.process_all()
             pump(lambda: app.status.get().startswith("Complete."))
         selected_output = self.folder / "CV_postprocessing"
@@ -756,19 +756,19 @@ class GuiWorkflowTests(unittest.TestCase):
             group.header.invoke()
             self.assertTrue(group.expanded)
             app.controls["fps"].value.set("2000")
-            app.controls["weak_reach_px"].value.set("60")
+            app.controls["weak_growth_steps"].value.set("60")
             app.controls["fps"].reset_button.invoke()
             self.assertEqual(app.controls["fps"].get_value(), 4000.0)
-            self.assertEqual(app.controls["weak_reach_px"].get_value(), 60)
+            self.assertEqual(app.controls["weak_growth_steps"].get_value(), 60)
             app.rim_to_rim.set(True)
             app.reset_choice("rim_to_rim")
             self.assertFalse(app.rim_to_rim.get())
-            app.shadow_suppression.set(False)
-            self.assertFalse(app.overrides()["shadow_suppression"])
-            app.reset_choice("shadow_suppression")
-            self.assertTrue(app.shadow_suppression.get())
+            app.approach_shadow_guard.set(False)
+            self.assertFalse(app.overrides()["approach_shadow_guard"])
+            app.reset_choice("approach_shadow_guard")
+            self.assertTrue(app.approach_shadow_guard.get())
             app.reflection.set("none")
-            app.reset_choice("reflection_mode")
+            app.reset_choice("surface_calibration_method")
             self.assertEqual(app.reflection.get(), "auto")
             pump(lambda: app.preview_ready)
             app.navigate_frame("first")

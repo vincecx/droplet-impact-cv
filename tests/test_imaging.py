@@ -27,7 +27,7 @@ from droplet_impact_cv.imaging import (
     touches_surface,
 )
 from droplet_impact_cv.models import (
-    DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
     AnalysisConfig,
     SurfaceLine,
 )
@@ -96,12 +96,12 @@ class ForegroundMaskTests(unittest.TestCase):
     def test_gas_side_area_threshold_accepts_a_narrow_detached_drop(self):
         mask = np.zeros((50, 50), dtype=np.uint8)
         mask[10:18, 20:24] = 1  # 32 pixels of area, only four pixels of width.
-        config = AnalysisConfig(Path("input"), Path("out.csv"), min_contact_px=30,
-                                min_droplet_area_px2=1, top_exclusion_ratio=0)
+        config = AnalysisConfig(Path("input"), Path("out.csv"), min_gas_area_px2=30,
+                                min_component_area_px2=1, top_exclusion_ratio=0)
         component, area = select_liquid_component(mask, SurfaceLine(40), config)
         self.assertEqual(area, 32)
         self.assertTrue(component[12, 22])
-        rejected, area = select_liquid_component(mask, SurfaceLine(40), replace(config, min_contact_px=33))
+        rejected, area = select_liquid_component(mask, SurfaceLine(40), replace(config, min_gas_area_px2=33))
         self.assertEqual(area, 0)
         self.assertFalse(rejected.any())
 
@@ -118,7 +118,7 @@ class ForegroundMaskTests(unittest.TestCase):
                 mask = foreground_mask(
                     image, background, SurfaceLine(35, 0), 1500,
                     replace(config, top_exclusion_ratio=ratio), make_structure(2),
-                    weak_threshold=500,
+                    weak_change_threshold=500,
                 )
                 self.assertFalse(mask[:cutoff].any())
                 if ratio < 1:
@@ -128,7 +128,7 @@ class ForegroundMaskTests(unittest.TestCase):
                 else:
                     self.assertFalse(mask[15, 10])
                 measurement = component_measurement(
-                    mask, SurfaceLine(35, 0), replace(config, top_exclusion_ratio=ratio, min_droplet_area_px2=1)
+                    mask, SurfaceLine(35, 0), replace(config, top_exclusion_ratio=ratio, min_component_area_px2=1)
                 )
                 self.assertFalse(measurement.mask[:cutoff].any())
         np.testing.assert_array_equal(background, original)
@@ -137,7 +137,7 @@ class ForegroundMaskTests(unittest.TestCase):
         mask = np.zeros((40, 40), dtype=np.uint8)
         mask[:8, :] = 1
         mask[15:25, 15:25] = 1
-        config = AnalysisConfig(input_dir=Path("input"), output_csv=Path("out.csv"), min_droplet_area_px2=1)
+        config = AnalysisConfig(input_dir=Path("input"), output_csv=Path("out.csv"), min_component_area_px2=1)
         measurement = component_measurement(mask, SurfaceLine(30, 0), config)
         self.assertEqual(measurement.area_px2, 100)
         self.assertFalse(measurement.mask[:10].any())
@@ -183,14 +183,14 @@ class ForegroundMaskTests(unittest.TestCase):
             image,
             background,
             SurfaceLine(45.0, angle_deg=0.0),
-            DEFAULT_MIN_STRONG_THRESHOLD,
+            DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
             config,
             make_structure(1),
         )
 
         self.assertEqual(mask[30, 30], 1)
 
-    def test_weak_threshold_extends_strong_detections_only_when_connected(self) -> None:
+    def test_weak_change_threshold_extends_strong_detections_only_when_connected(self) -> None:
         background = np.full((60, 90), 4000, dtype=np.float32)
         image = background.copy()
         image[20:40, 10:20] = 2000  # Strong rim: delta 2000.
@@ -209,7 +209,7 @@ class ForegroundMaskTests(unittest.TestCase):
             1500.0,
             config,
             make_structure(1),
-            weak_threshold=500.0,
+            weak_change_threshold=500.0,
         )
 
         self.assertEqual(mask[30, 15], 1)
@@ -234,7 +234,7 @@ class ForegroundMaskTests(unittest.TestCase):
             1500.0,
             config,
             make_structure(1),
-            weak_threshold=500.0,
+            weak_change_threshold=500.0,
         )
 
         self.assertEqual(mask[15, 30], 1)
@@ -251,8 +251,8 @@ class ForegroundMaskTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
         surface_line = SurfaceLine(50.0, angle_deg=0.0)
@@ -261,7 +261,7 @@ class ForegroundMaskTests(unittest.TestCase):
             image,
             background,
             surface_line,
-            DEFAULT_MIN_STRONG_THRESHOLD,
+            DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
             config,
             make_structure(3),
         )
@@ -282,8 +282,8 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 
@@ -302,8 +302,8 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             min_impact_width_px=60,
             rim_to_rim=True,
             debug_dir=None,
@@ -324,11 +324,11 @@ class ComponentMeasurementTests(unittest.TestCase):
         surface_line = SurfaceLine(50.0, angle_deg=0.0)
         contact_config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, debug_dir=None,
+            min_component_area_px2=1, min_gas_area_px2=1, debug_dir=None,
         )
         rim_to_rim_config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, rim_to_rim=True, debug_dir=None,
+            min_component_area_px2=1, min_gas_area_px2=1, rim_to_rim=True, debug_dir=None,
         )
 
         contact_measurement = component_measurement(mask, surface_line, contact_config)
@@ -353,7 +353,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         surface_line = SurfaceLine(80.0, angle_deg=np.degrees(np.arctan(0.5)))
         config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, rim_to_rim=True, debug_dir=None,
+            min_component_area_px2=1, min_gas_area_px2=1, rim_to_rim=True, debug_dir=None,
         )
 
         measurement = component_measurement(mask, surface_line, config)
@@ -371,7 +371,7 @@ class ComponentMeasurementTests(unittest.TestCase):
             with self.subTest(rim_to_rim=rim_to_rim):
                 config = AnalysisConfig(
                     input_dir=Path("input"), output_csv=Path("output.csv"),
-                    min_droplet_area_px2=1, min_contact_px=1,
+                    min_component_area_px2=1, min_gas_area_px2=1,
                     rim_to_rim=rim_to_rim, debug_dir=None, top_exclusion_ratio=0,
                 )
                 measurement = component_measurement(
@@ -395,7 +395,7 @@ class ComponentMeasurementTests(unittest.TestCase):
         mask[20:50, 30:70] = 1
         config = AnalysisConfig(
             input_dir=Path("input"), output_csv=Path("output.csv"),
-            min_droplet_area_px2=1, min_contact_px=1, debug_dir=None, top_exclusion_ratio=0,
+            min_component_area_px2=1, min_gas_area_px2=1, debug_dir=None, top_exclusion_ratio=0,
         )
 
         measurement = component_measurement(mask, SurfaceLine(70.0, angle_deg=0.0), config)
@@ -413,8 +413,8 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
         surface_line = SurfaceLine(50.0, angle_deg=0.0)
@@ -433,8 +433,8 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 
@@ -449,9 +449,9 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            reflection_mode="none",
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            surface_calibration_method="none",
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 
@@ -467,10 +467,10 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            reflection_mode="none",
-            surface_band_px=3,
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            surface_calibration_method="none",
+            contact_band_half_height_px=3,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 
@@ -489,8 +489,8 @@ class ComponentMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 
@@ -517,7 +517,7 @@ class SurfaceCalibrationTests(unittest.TestCase):
             config = AnalysisConfig(
                 input_dir=input_dir,
                 output_csv=input_dir / "output.csv",
-                min_droplet_area_px2=10,
+                min_component_area_px2=10,
                 morphology_radius_px=1,
                 debug_dir=None,
             )
@@ -572,7 +572,7 @@ class SurfaceCalibrationTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=100,
+            min_component_area_px2=100,
             morphology_radius_px=1,
             debug_dir=None,
         )

@@ -26,7 +26,7 @@ uv run droplet-impact-cv path/to/image_sequences \
   --fps 1000 \
   --pixel-size-mm-per-px 0.001 \
   --surface-calibration-frame 61 \
-  --reflection-mode mirror
+  --surface-calibration-method mirror
 ```
 
 ## Prepare the input
@@ -112,7 +112,7 @@ option syntax; blank lines and `#` comments are allowed:
 
 # Surface calibration
 --surface-calibration-frame 10
---reflection-mode mirror
+--surface-calibration-method mirror
 ```
 
 `--substrate`, `--hydrophilicity`, and `--substrate_temp_deg_c` record the surface
@@ -121,8 +121,7 @@ They default to `null`, remain fixed during GUI preview and batch processing,
 and are written under `parameters` in the output folder's `run_params.json`.
 Quote metadata values containing spaces in `cv_config.txt`, such as
 `--substrate "Surface 1"`. The GUI preserves this metadata when saving settings.
-Use `--rim-to-rim {0,1}` to select the diameter measurement; the old
-`--hydrophobic` option is rejected in both CLI arguments and configuration files.
+Use `--rim-to-rim {0,1}` to select the diameter measurement.
 
 Settings take precedence in this order, from highest to lowest:
 
@@ -140,7 +139,7 @@ from the configuration preserves its automatic behavior.
 ### Liquid detection
 
 Liquid is detected by changes from the clean background, whether darker or
-brighter. The main threshold identifies clear liquid; the faint threshold
+brighter. The strong change threshold identifies clear liquid; the weak change threshold
 extends the outline near already detected liquid. Enclosed bright regions are
 filled as part of the drop.
 
@@ -162,7 +161,7 @@ resolve a gap smaller than its edge uncertainty. The preview and CSV flag
 possible shadow contact when only the faint candidate reaches the surface,
 and contact onset immediately following a tracked detached drop.
 Check the raw lower contour and calibrated surface before trusting such contact.
-Disable **Approach / onset shadow guard** or use `--no-shadow-suppression` to
+Disable **Approach / onset shadow guard** or use `--no-approach-shadow-guard` to
 compare with ordinary faint-region growth.
 
 The guard targets approach and initial contact, not general contact detection
@@ -171,14 +170,11 @@ produce a nonzero contact width and a review warning. Reducing weak growth to
 remove such a neck can also remove real faint liquid near maximum spreading;
 inspect both stages before changing the growth limit.
 
-`--weak-reach-px 0` disables faint extension. Positive values bound the number of
-pixel-neighbor growth steps; increasing reach permits more growth, whereas
-increasing the faint threshold rejects weaker changes. Older versions accidentally
-treated reach 0 as unlimited growth. To retain faint-sheet recovery when opening
-an older configuration containing 0, select a positive reach such as 40 and
-inspect the resulting outline.
+`--weak-growth-steps 0` disables faint extension. Positive values bound the number
+of pixel-neighbor growth steps; increasing this limit permits more growth,
+whereas increasing the weak change threshold rejects weaker changes.
 
-The automatic main threshold has a floor (`--min-strong-threshold`). A first
+The automatic strong change threshold has a floor (`--min-strong-change-threshold`). A first
 noise estimate locates a sampling anchor: first contact with a calibrated line,
 or sustained loss of ellipse agreement when the surface is uncalibrated. Shape
 detection requires three complete elliptical silhouettes and two consecutive
@@ -193,13 +189,13 @@ give a robust noise level (median + 8 MAD-based standard deviations). The 90th
 percentile of those per-frame levels, bounded by the floor, sets the threshold.
 Explicit thresholds bypass sampling.
 
-For missing liquid edges, lower the main or faint thresholds, or increase faint
-reach. For separate specks, increase minimum drop area or outline cleanup size.
+For missing liquid edges, lower the strong or weak change thresholds, or increase the weak
+growth limit. For separate specks, increase minimum drop area or outline cleanup size.
 
 ### Substrate calibration
 
 One substrate line is used for the whole sequence. The surface calibration
-frame and `--reflection-mode` determine how that line is found:
+frame and `--surface-calibration-method` determine how that line is found:
 
 | Reflection mode | Surface calibration |
 | --- | --- |
@@ -217,7 +213,7 @@ fitting, even if a calibration frame is also selected.
 ### Spreading diameter, impact, and time
 
 `d_spread` is the outermost liquid span within the substrate band
-(`--surface-band-px`, default 1 px); it is zero when the drop is clear of that
+(`--contact-band-half-height-px`, default 1 px); it is zero when the drop is clear of that
 band. With `--rim-to-rim 1`, it is the full rim-to-rim width instead.
 
 Impact is always detected from contact-line width reaching
@@ -324,21 +320,18 @@ alphabetically by name, ignoring leading dashes.
 GUI threshold labels refer to **background change**, not raw image brightness.
 Both brightening and darkening count. **Weak growth limit (steps)** is a count
 of 4-neighbor propagation steps through eligible pixels before cleanup, not a
-Euclidean radius or a strict bound on the final cleaned contour. The compatible
-CLI and runtime field names remain `--weak-reach-px` and `weak_reach_px`.
+Euclidean radius or a strict bound on the final cleaned contour. Use
+`--weak-growth-steps` to set this limit.
 
 **Min gas-side area (px2)** is the total detected area on or above the surface,
-including detached drops; it is not contact-line length. Use
-`--min-gas-area-px2`; `--min-contact-px` remains a compatibility alias. Saved
-configuration files use the new option. Python and `run_params.json` retain the
-legacy field `min_contact_px` with this area meaning. **Min component area**
+including detached drops; it is not contact-line length. Set it with
+`--min-gas-area-px2`. **Min component area**
 instead filters the whole candidate component (which may include reflections)
 and is also applied when retaining a component after surface clipping.
 
 **Outline cleanup radius (px)** defines an elliptical kernel of width
-`2*radius+1`. Radius 0 now disables closing/opening morphology; enclosed-hole
-filling and component selection still apply. Earlier versions silently used
-radius 1 when 0 was entered.
+`2*radius+1`. Radius 0 disables closing/opening morphology; enclosed-hole
+filling and component selection still apply.
 
 **Contact-band half-height (px)** is vertical y tolerance above and below the
 line at each x, not full band thickness or surface-normal distance. **Surface
@@ -356,9 +349,9 @@ or switch shadow suppression on or off.
 | `--hydrophilicity {SHI,HI,HO,SHO}` | `None` | Surface wettability; experiment metadata only. |
 | `--substrate_temp_deg_c` | `None` | Surface temperature in degrees Celsius; experiment metadata only. |
 | `--mirror-min-depth-px` | `50` | Minimum mirror candidate depth below the coarse surface line; also used for automatic reflection classification. |
-| `--reflection-mode {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
+| `--surface-calibration-method {auto,mirror,none}` | `auto` | Select automatic, reflection-symmetry, or lower-contour surface calibration. |
 | `--surface-angle-deg` | detected or `0` | Manually override the clockwise surface angle. |
-| `--surface-band-px` | `1` | Vertical half-height of the contact-measurement band at each x, not full thickness or normal distance. |
+| `--contact-band-half-height-px` | `1` | Vertical half-height of the contact-measurement band at each x, not full thickness or normal distance. |
 | `--surface-calibration-frame` | none | Impacted-droplet frame used to calibrate the fixed surface line. |
 | `--surface-y-px` | automatic | Manually override the surface-line center y coordinate. |
 
@@ -367,20 +360,20 @@ or switch shadow suppression on or off.
 | Parameter | Default | Purpose |
 | --- | --- | --- |
 | `--foreground-depth-px` | `220` | Candidate-search depth vertically below the line; reported area remains clipped to the gas side. |
-| `--shadow-suppression`, `--no-shadow-suppression` | enabled | Use contour, motion, and edge evidence to limit lower shadow fringes before and at initial contact. |
-| `--min-strong-threshold` | `200` | Lower bound used by automatic strong-threshold estimation. |
-| `--strong-threshold` | automatic | Strong threshold on absolute background change in gray levels, not raw image brightness. |
+| `--approach-shadow-guard`, `--no-approach-shadow-guard` | enabled | Use contour, motion, and edge evidence to limit lower shadow fringes before and at initial contact. |
+| `--min-strong-change-threshold` | `200` | Lower bound used by automatic strong-change-threshold estimation. |
+| `--strong-change-threshold` | automatic | Strong threshold on absolute background change in gray levels, not raw image brightness. |
 | `--top-exclusion-ratio` | `0.25` | Fraction of image height excluded from droplet detection at the top, between 0 and 1. Background and surface calibration still use the full image. |
-| `--weak-reach-px` | `40` | Maximum 4-neighbor weak-growth steps before cleanup; not a Euclidean radius. 0 disables weak extension. |
-| `--weak-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
-| `--weak-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
+| `--weak-growth-steps` | `40` | Maximum 4-neighbor weak-growth steps before cleanup; not a Euclidean radius. 0 disables weak extension. |
+| `--weak-change-threshold` | ratio-derived | Explicit weak threshold for faint liquid. |
+| `--weak-change-threshold-ratio` | `0.3` | Weak/strong threshold ratio when no explicit weak threshold is set. |
 
 ### Drop selection and outline cleanup
 
 | Parameter | Default | Purpose |
 | --- | --- | --- |
-| `--min-gas-area-px2` (alias `--min-contact-px`) | `30` | Minimum total detected gas-side area, not contact width; also applies to detached drops. |
-| `--min-droplet-area-px2` | `250` | Minimum candidate-component area, also used after surface clipping. |
+| `--min-gas-area-px2` | `30` | Minimum total detected gas-side area, not contact width; also applies to detached drops. |
+| `--min-component-area-px2` | `250` | Minimum candidate-component area, also used after surface clipping. |
 | `--morphology-radius-px` | `3` | Elliptical cleanup radius; kernel width is `2*radius+1`. 0 disables gap/speck morphology; hole filling remains. |
 
 ### Input and working range

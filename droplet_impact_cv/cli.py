@@ -9,14 +9,14 @@ from pathlib import Path
 from .analysis import analyze_sequence
 from .models import (
     DEFAULT_FPS,
-    DEFAULT_MIN_STRONG_THRESHOLD,
+    DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
     DEFAULT_MIRROR_MIN_DEPTH_PX,
     DEFAULT_PIXEL_SIZE_MM_PER_PX,
-    DEFAULT_SURFACE_BAND_PX,
+    DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX,
     DEFAULT_TOP_EXCLUSION_RATIO,
-    DEFAULT_WEAK_REACH_PX,
-    DEFAULT_WEAK_THRESHOLD_RATIO,
-    REFLECTION_MODES,
+    DEFAULT_WEAK_GROWTH_STEPS,
+    DEFAULT_WEAK_CHANGE_THRESHOLD_RATIO,
+    SURFACE_CALIBRATION_METHODS,
     OUTPUT_CSV_FILENAME,
     AnalysisConfig,
 )
@@ -103,7 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         metavar="PATH",
         default=None,
-        help="Legacy CSV path override; takes precedence over --output-dir. "
+        help="CSV path override; takes precedence over --output-dir. "
              "Default: <output-dir>/cv_output.csv",
     )
     parser.add_argument(
@@ -170,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Frame number containing an impacted droplet, used to calibrate "
-            "the surface line according to --reflection-mode."
+            "the surface line according to --surface-calibration-method."
         ),
     )
     parser.add_argument(
@@ -184,8 +184,8 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--reflection-mode",
-        choices=REFLECTION_MODES,
+        "--surface-calibration-method",
+        choices=SURFACE_CALIBRATION_METHODS,
         default="auto",
         help=(
             "Surface calibration method: auto selects a method, mirror uses reflection "
@@ -203,35 +203,35 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--strong-threshold",
-        dest="strong_threshold",
+        "--strong-change-threshold",
+        dest="strong_change_threshold",
         type=positive_float,
         metavar="VALUE",
         default=None,
         help="Strong threshold on absolute change from the clean background in gray levels; not an image-brightness cutoff.",
     )
     parser.add_argument(
-        "--weak-threshold",
-        dest="weak_threshold",
+        "--weak-change-threshold",
+        dest="weak_change_threshold",
         type=positive_float,
         metavar="VALUE",
         default=None,
         help=(
             "Weak threshold in gray levels for extending detections across "
             "faint transparent liquid. Pixels above this value count as "
-            "foreground only when connected to a pixel above --strong-threshold. "
-            "Default: --weak-threshold-ratio of the effective threshold."
+            "foreground only when connected to a pixel above --strong-change-threshold. "
+            "Default: --weak-change-threshold-ratio of the effective threshold."
         ),
     )
     parser.add_argument(
-        "--weak-threshold-ratio",
-        dest="weak_threshold_ratio",
+        "--weak-change-threshold-ratio",
+        dest="weak_change_threshold_ratio",
         type=unit_fraction,
         metavar="RATIO",
-        default=DEFAULT_WEAK_THRESHOLD_RATIO,
+        default=DEFAULT_WEAK_CHANGE_THRESHOLD_RATIO,
         help=(
             "Weak threshold as a fraction of the effective strong threshold, "
-            "used when --weak-threshold is not given. Default: 0.3"
+            "used when --weak-change-threshold is not given. Default: 0.3"
         ),
     )
     parser.add_argument(
@@ -242,17 +242,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Minimum mirror candidate depth below the coarse surface line in px. Default: 50",
     )
     parser.add_argument(
-        "--shadow-suppression",
+        "--approach-shadow-guard",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Limit near-surface shadows using the approaching drop's contour and two preceding frames. Default: enabled.",
     )
     parser.add_argument(
-        "--weak-reach-px",
-        dest="weak_reach_px",
+        "--weak-growth-steps",
+        dest="weak_growth_steps",
         type=nonnegative_int,
         metavar="DISTANCE",
-        default=DEFAULT_WEAK_REACH_PX,
+        default=DEFAULT_WEAK_GROWTH_STEPS,
         help=(
             "Maximum 4-neighbor growth steps through weak-change pixels from a "
             "strong detection, before outline cleanup; not a Euclidean radius. "
@@ -260,16 +260,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--min-strong-threshold",
-        dest="min_strong_threshold",
+        "--min-strong-change-threshold",
+        dest="min_strong_change_threshold",
         type=positive_float,
         metavar="VALUE",
-        default=DEFAULT_MIN_STRONG_THRESHOLD,
+        default=DEFAULT_MIN_STRONG_CHANGE_THRESHOLD,
         help="Lower bound for automatic threshold. Default: 200",
     )
     parser.add_argument(
-        "--min-droplet-area-px2",
-        dest="min_droplet_area_px2",
+        "--min-component-area-px2",
+        dest="min_component_area_px2",
         type=positive_float,
         metavar="AREA",
         default=250,
@@ -282,9 +282,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Elliptical cleanup-kernel radius in px (kernel width 2*radius+1). 0 disables gap/speck morphology; enclosed-hole filling remains. Default: 3",
     )
     parser.add_argument(
-        "--surface-band-px",
+        "--contact-band-half-height-px",
         type=nonnegative_int,
-        default=DEFAULT_SURFACE_BAND_PX,
+        default=DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX,
         help=(
             "Vertical half-height in px of the contact-measurement band at each x; "
             "not the full band thickness or surface-normal distance. Default: 1"
@@ -310,15 +310,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--min-gas-area-px2",
-        "--min-contact-px",
-        dest="min_contact_px",
+        dest="min_gas_area_px2",
         type=nonnegative_int,
         metavar="AREA",
         default=30,
         help=(
             "Minimum total detected area on or above the surface in px2 for a "
             "selected component; applies to detached drops too. Not contact-line "
-            "width; --min-contact-px is a compatibility alias. Default: 30"
+            "width. Default: 30"
         ),
     )
     parser.add_argument(
@@ -357,7 +356,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug-dir",
         type=Path,
         default=None,
-        help="Legacy overlay folder override; takes precedence over --output-dir. "
+        help="Overlay folder override; takes precedence over --output-dir. "
              "Default: <output-dir>/debug_overlays",
     )
     parser.add_argument(
@@ -415,21 +414,21 @@ def config_from_args(args: argparse.Namespace) -> AnalysisConfig:
         surface_calibration_frame=args.surface_calibration_frame,
         droplet_size_ref_frame=args.droplet_size_ref_frame,
         surface_angle_deg=args.surface_angle_deg,
-        reflection_mode=args.reflection_mode,
+        surface_calibration_method=args.surface_calibration_method,
         mirror_min_depth_px=args.mirror_min_depth_px,
-        strong_threshold=args.strong_threshold,
-        weak_threshold=args.weak_threshold,
-        weak_threshold_ratio=args.weak_threshold_ratio,
-        weak_reach_px=args.weak_reach_px,
-        shadow_suppression=args.shadow_suppression,
-        min_strong_threshold=args.min_strong_threshold,
-        min_droplet_area_px2=int(args.min_droplet_area_px2),
+        strong_change_threshold=args.strong_change_threshold,
+        weak_change_threshold=args.weak_change_threshold,
+        weak_change_threshold_ratio=args.weak_change_threshold_ratio,
+        weak_growth_steps=args.weak_growth_steps,
+        approach_shadow_guard=args.approach_shadow_guard,
+        min_strong_change_threshold=args.min_strong_change_threshold,
+        min_component_area_px2=int(args.min_component_area_px2),
         morphology_radius_px=args.morphology_radius_px,
-        surface_band_px=args.surface_band_px,
+        contact_band_half_height_px=args.contact_band_half_height_px,
         rim_to_rim=bool(args.rim_to_rim),
         foreground_depth_px=args.foreground_depth_px,
         top_exclusion_ratio=args.top_exclusion_ratio,
-        min_contact_px=args.min_contact_px,
+        min_gas_area_px2=args.min_gas_area_px2,
         min_impact_width_px=args.min_impact_width_px,
         include_pre_impact=args.include_pre_impact,
         time_zero=args.time_zero,

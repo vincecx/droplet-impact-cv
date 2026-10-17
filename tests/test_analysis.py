@@ -172,8 +172,8 @@ class DebugOverlayLifecycleTests(unittest.TestCase):
                 surface_y_px=80,
                 surface_angle_deg=0.0,
                 morphology_radius_px=0,
-                min_droplet_area_px2=1,
-                min_contact_px=1,
+                min_component_area_px2=1,
+                min_gas_area_px2=1,
                 include_pre_impact=True,
                 debug_dir=debug_dir,
                 debug_interval=100,
@@ -210,8 +210,8 @@ class ContourMeasurementTests(unittest.TestCase):
         config = AnalysisConfig(
             input_dir=Path("input"),
             output_csv=Path("output.csv"),
-            min_droplet_area_px2=1,
-            min_contact_px=1,
+            min_component_area_px2=1,
+            min_gas_area_px2=1,
             debug_dir=None,
         )
 

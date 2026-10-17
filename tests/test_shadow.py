@@ -23,10 +23,10 @@ class ShadowSegmentationTests(unittest.TestCase):
         self.background = np.full((140, 160), 4000, dtype=np.float32)
         self.surface = SurfaceLine(110)
         self.config = AnalysisConfig(
-            Path("input"), Path("out.csv"), strong_threshold=1000, weak_threshold=100,
-            weak_reach_px=20, surface_y_px=110, surface_angle_deg=0,
+            Path("input"), Path("out.csv"), strong_change_threshold=1000, weak_change_threshold=100,
+            weak_growth_steps=20, surface_y_px=110, surface_angle_deg=0,
             top_exclusion_ratio=0, morphology_radius_px=1, foreground_depth_px=0,
-            min_droplet_area_px2=20, min_contact_px=5, min_impact_width_px=10,
+            min_component_area_px2=20, min_gas_area_px2=5, min_impact_width_px=10,
             debug_dir=None, include_pre_impact=True,
         )
         self.structure = make_structure(1)
@@ -58,17 +58,17 @@ class ShadowSegmentationTests(unittest.TestCase):
         image = self.background.copy()
         image[30:40, 20:25] = 2000
         image[30:40, 25:75] = 3800
-        mask = hysteresis_change_mask(image, self.background, 1000, 100, max_propagation_px=0)
+        mask = hysteresis_change_mask(image, self.background, 1000, 100, max_growth_steps=0)
         self.assertTrue(mask[35, 22])
         self.assertFalse(mask[35, 30])
         with self.assertRaises(ValueError):
-            hysteresis_change_mask(image, self.background, 1000, 100, max_propagation_px=-1)
+            hysteresis_change_mask(image, self.background, 1000, 100, max_growth_steps=-1)
 
     def test_tracked_detached_drop_loses_shadow_contact_but_keeps_strong_pixels(self):
         image = self.drop(74, shadow=True)
         original = image.copy()
         result = self.segment(image, self.history())
-        legacy = self.segment(image, config=replace(self.config, shadow_suppression=False))
+        legacy = self.segment(image, config=replace(self.config, approach_shadow_guard=False))
         self.assertGreater(result.shadow_removed_px2, 0)
         self.assertFalse(result.mask[109:111].any())
         self.assertTrue(legacy.mask[109:111].any())
@@ -78,7 +78,7 @@ class ShadowSegmentationTests(unittest.TestCase):
 
     def test_missing_or_inconsistent_history_preserves_candidate_and_warns(self):
         image = self.drop(74, shadow=True)
-        expected = self.segment(image, config=replace(self.config, shadow_suppression=False))
+        expected = self.segment(image, config=replace(self.config, approach_shadow_guard=False))
         wrong = tuple(replace(model, center=(model.center[0] + 40, model.center[1]))
                       for model in self.history())
         for previous in ((), self.history()[:1], wrong):
@@ -88,11 +88,11 @@ class ShadowSegmentationTests(unittest.TestCase):
             self.assertIn("Possible shadow contact", result.warning)
 
     def test_contacting_dark_and_bright_faint_sheets_are_preserved(self):
-        config = replace(self.config, weak_reach_px=40)
+        config = replace(self.config, weak_growth_steps=40)
         for bright in (False, True):
             image = self.drop(88, sheet=True, bright=bright)
             result = self.segment(image, self.history(), config)
-            expected = self.segment(image, config=replace(config, shadow_suppression=False))
+            expected = self.segment(image, config=replace(config, approach_shadow_guard=False))
             np.testing.assert_array_equal(result.mask, expected.mask)
             self.assertTrue(result.mask[108, 42])
             self.assertTrue(result.mask[108, 123])
@@ -117,7 +117,7 @@ class ShadowSegmentationTests(unittest.TestCase):
         self.assertFalse(result.free_drop_model.is_detached)
         self.assertGreater(result.shadow_removed_px2, 0)
         self.assertTrue(result.mask[109, 80])
-        config = replace(self.config, weak_reach_px=40)
+        config = replace(self.config, weak_growth_steps=40)
         for value in (3800, 4200):
             sheet = image.copy()
             shelf = (yy >= 106) & (yy <= 110) & (xx >= 40) & (xx <= 125) & (sheet == self.background)
@@ -125,7 +125,7 @@ class ShadowSegmentationTests(unittest.TestCase):
             guarded = self.segment(sheet, previous, config)
             self.assertIsNotNone(guarded.free_drop_model)
             self.assertFalse(guarded.free_drop_model.is_detached)
-            ordinary = self.segment(sheet, config=replace(config, shadow_suppression=False))
+            ordinary = self.segment(sheet, config=replace(config, approach_shadow_guard=False))
             np.testing.assert_array_equal(guarded.mask, ordinary.mask)
 
     def test_history_uses_filename_intervals_and_rejects_size_changes(self):
@@ -164,8 +164,8 @@ class ShadowSegmentationTests(unittest.TestCase):
             self.assertEqual(sought.d_spread_px, 0)
             # A replaced preview shares the small model cache but must use its
             # own thresholds when preceding-frame evidence is requested.
-            replace(prepared, weak_threshold=1000).measure(files[2])
-            _, sought_again = replace(prepared, weak_threshold=100).measure(files[3])
+            replace(prepared, weak_change_threshold=1000).measure(files[2])
+            _, sought_again = replace(prepared, weak_change_threshold=100).measure(files[3])
             np.testing.assert_array_equal(sought_again.mask, sought.mask)
             rows = analyze_sequence(config)
             self.assertEqual(rows[3].shadow_removed_px2, sought.shadow_removed_px2)

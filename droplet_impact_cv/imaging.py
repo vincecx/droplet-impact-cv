@@ -12,8 +12,8 @@ from scipy import ndimage as ndi
 from scipy.signal import find_peaks
 
 from .models import (
-    DEFAULT_SURFACE_BAND_PX,
-    DEFAULT_WEAK_REACH_PX,
+    DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX,
+    DEFAULT_WEAK_GROWTH_STEPS,
     AnalysisConfig,
     ComponentMeasurement,
     SurfaceLine,
@@ -118,19 +118,19 @@ def estimate_threshold(
     background: np.ndarray,
     surface_y_px: int,
     sample_frame_count: int,
-    min_strong_threshold: float,
+    min_strong_change_threshold: float,
     *,
     surface_line: SurfaceLine | None = None,
 ) -> float:
     sample_files = files[: min(sample_frame_count, len(files))]
     if not sample_files:
-        return min_strong_threshold
+        return min_strong_change_threshold
 
     yy, xx = np.indices(background.shape)
     line = surface_line or SurfaceLine(float(surface_y_px))
     roi = yy < line.y_at(xx, background.shape[1]) - 30
     if not roi.any():
-        return min_strong_threshold
+        return min_strong_change_threshold
     frame_thresholds = []
     for path in sample_files:
         image = read_image(path)
@@ -140,7 +140,7 @@ def estimate_threshold(
         frame_thresholds.append(median + 8.0 * 1.4826 * mad)
     # Each frame gets equal weight. Pooling pixels hides short-lived noise
     # changes around impact, and a single extreme frame should not dominate.
-    return max(min_strong_threshold, float(np.percentile(frame_thresholds, 90)))
+    return max(min_strong_change_threshold, float(np.percentile(frame_thresholds, 90)))
 
 
 def ellipse_overlap(component: np.ndarray) -> float | None:
@@ -164,7 +164,7 @@ def threshold_sampling_anchor(
     background: np.ndarray,
     surface_line: SurfaceLine,
     threshold: float,
-    weak_threshold: float,
+    weak_change_threshold: float,
     config: AnalysisConfig,
     structure: np.ndarray,
     surface_is_calibrated: bool,
@@ -187,7 +187,7 @@ def threshold_sampling_anchor(
         if surface_is_calibrated:
             segmentation = foreground_segmentation(
                 image, background, surface_line, threshold, config, structure,
-                weak_threshold=weak_threshold,
+                weak_change_threshold=weak_change_threshold,
                 frame_number=frame_number_from_filename(path),
                 previous_models=tuple(model for model in previous_models[-2:]
                                       if model is not None and model.is_detached),
@@ -200,7 +200,7 @@ def threshold_sampling_anchor(
             continue
 
         mask = full_foreground_mask(
-            image, background, threshold, structure, weak_threshold, config.weak_reach_px
+            image, background, threshold, structure, weak_change_threshold, config.weak_growth_steps
         )
         mask[:top] = 0
         labels, count = ndi.label(mask)
@@ -208,7 +208,7 @@ def threshold_sampling_anchor(
         for label in range(1, count + 1):
             component = labels == label
             area = int(component.sum())
-            if area < config.min_droplet_area_px2:
+            if area < config.min_component_area_px2:
                 continue
             bbox = component_bbox(component)
             assert bbox is not None
@@ -271,11 +271,11 @@ def hysteresis_change_mask(
     image: np.ndarray,
     background: np.ndarray,
     threshold: float,
-    weak_threshold: float | None,
+    weak_change_threshold: float | None,
     roi: np.ndarray | None = None,
-    max_propagation_px: int = DEFAULT_WEAK_REACH_PX,
+    max_growth_steps: int = DEFAULT_WEAK_GROWTH_STEPS,
 ) -> np.ndarray:
-    """Detect changed pixels with an optional weak-threshold extension.
+    """Detect changed pixels with an optional weak-change-threshold extension.
 
     Transparent liquid can appear brighter than the local background, for
     example a glassy lamella refracting the backlight over a dark substrate,
@@ -290,18 +290,18 @@ def hysteresis_change_mask(
     strong = change >= threshold
     if roi is not None:
         strong &= roi
-    if max_propagation_px < 0:
+    if max_growth_steps < 0:
         raise ValueError("weak reach must be nonnegative")
-    if max_propagation_px == 0 or weak_threshold is None or weak_threshold >= threshold:
+    if max_growth_steps == 0 or weak_change_threshold is None or weak_change_threshold >= threshold:
         return strong
-    weak = change >= weak_threshold
+    weak = change >= weak_change_threshold
     if roi is not None:
         weak &= roi
     # Bound the growth distance so a diffuse out-of-focus artifact that
     # touches the droplet cannot pull the whole artifact into the mask.
     # Transparent-film interiors sit well within this distance of a strong
     # rim or highlight detection.
-    return ndi.binary_dilation(strong, mask=weak, iterations=max_propagation_px)
+    return ndi.binary_dilation(strong, mask=weak, iterations=max_growth_steps)
 
 
 @dataclass(frozen=True)
@@ -324,7 +324,7 @@ def strong_drop_model(
     # Closing must not introduce artificial contact or cross the excluded border.
     strong &= roi
     core, _ = select_liquid_component(strong, surface_line, config, preferred_center_x)
-    model = fit_free_drop_model(core, surface_line, top_rows, config.surface_band_px,
+    model = fit_free_drop_model(core, surface_line, top_rows, config.contact_band_half_height_px,
                                 frame_number, allow_contact=True)
     return core, model
 
@@ -336,7 +336,7 @@ def foreground_segmentation(
     threshold: float,
     config: AnalysisConfig,
     structure: np.ndarray,
-    weak_threshold: float | None = None,
+    weak_change_threshold: float | None = None,
     *,
     frame_number: int = 0,
     previous_models: tuple[FreeDropModel, ...] = (),
@@ -350,14 +350,14 @@ def foreground_segmentation(
         image,
         background,
         threshold,
-        weak_threshold,
+        weak_change_threshold,
         roi,
-        config.weak_reach_px,
+        config.weak_growth_steps,
     )
     mask = clean_binary_mask(changed.astype(np.uint8), structure)
     # Cleanup can expand the outline, so enforce the exclusion again afterwards.
     mask[:top_rows] = 0
-    if not config.shadow_suppression or config.weak_reach_px == 0 or weak_threshold is None or weak_threshold >= threshold:
+    if not config.approach_shadow_guard or config.weak_growth_steps == 0 or weak_change_threshold is None or weak_change_threshold >= threshold:
         return ForegroundSegmentation(mask)
     core, model = strong_drop_model(
         image, background, surface_line, threshold, config, structure,
@@ -366,14 +366,14 @@ def foreground_segmentation(
     removed = 0
     if model is not None:
         mask, removed = constrain_shadow_fringe(
-            mask.astype(bool), core, model, previous_models, config.surface_band_px,
-            image, background, weak_threshold, surface_line,
+            mask.astype(bool), core, model, previous_models, config.contact_band_half_height_px,
+            image, background, weak_change_threshold, surface_line,
         )
     warning = None
     if core.any():
         candidate, _ = select_liquid_component(mask, surface_line, config, preferred_center_x)
-        if surface_intersection_bounds(candidate, surface_line, config.surface_band_px) is not None:
-            if surface_intersection_bounds(core, surface_line, config.surface_band_px) is None:
+        if surface_intersection_bounds(candidate, surface_line, config.contact_band_half_height_px) is not None:
+            if surface_intersection_bounds(core, surface_line, config.contact_band_half_height_px) is None:
                 warning = "Possible shadow contact: verify the lower contour and surface line."
             elif previous_models and (model is None or not model.is_detached):
                 warning = "Contact onset: verify the lower contour; shadow and liquid may overlap."
@@ -383,11 +383,11 @@ def foreground_segmentation(
 def foreground_mask(
     image: np.ndarray, background: np.ndarray, surface_line: SurfaceLine,
     threshold: float, config: AnalysisConfig, structure: np.ndarray,
-    weak_threshold: float | None = None,
+    weak_change_threshold: float | None = None,
 ) -> np.ndarray:
     """Frame-only candidate mask; sequence analysis supplies temporal evidence."""
     return foreground_segmentation(
-        image, background, surface_line, threshold, config, structure, weak_threshold,
+        image, background, surface_line, threshold, config, structure, weak_change_threshold,
     ).mask
 
 
@@ -402,20 +402,20 @@ def full_foreground_mask(
     background: np.ndarray,
     threshold: float,
     structure: np.ndarray,
-    weak_threshold: float | None = None,
-    weak_reach_px: int = DEFAULT_WEAK_REACH_PX,
+    weak_change_threshold: float | None = None,
+    weak_growth_steps: int = DEFAULT_WEAK_GROWTH_STEPS,
 ) -> np.ndarray:
     changed = hysteresis_change_mask(
         image,
         background,
         threshold,
-        weak_threshold,
-        max_propagation_px=weak_reach_px,
+        weak_change_threshold,
+        max_growth_steps=weak_growth_steps,
     )
     return clean_binary_mask(changed, structure)
 
 
-def largest_component(mask: np.ndarray, min_droplet_area_px2: int) -> np.ndarray:
+def largest_component(mask: np.ndarray, min_component_area_px2: int) -> np.ndarray:
     labels, count = ndi.label(mask)
     if count == 0:
         return np.zeros(mask.shape, dtype=bool)
@@ -424,7 +424,7 @@ def largest_component(mask: np.ndarray, min_droplet_area_px2: int) -> np.ndarray
     best_area = 0
     for label in range(1, count + 1):
         area = int(np.sum(labels == label))
-        if area >= min_droplet_area_px2 and area > best_area:
+        if area >= min_component_area_px2 and area > best_area:
             best_label = label
             best_area = area
 
@@ -467,10 +467,10 @@ def select_liquid_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_droplet_area_px2:
+        if area < config.min_component_area_px2:
             continue
         gas_side_pixels = int((component & gas_side).sum())
-        if gas_side_pixels < config.min_contact_px:
+        if gas_side_pixels < config.min_gas_area_px2:
             continue
         bbox = component_bbox(component)
         assert bbox is not None
@@ -544,7 +544,7 @@ def spreading_profile_on_surface(
 def surface_intersection_bounds(
     component: np.ndarray,
     surface_line: SurfaceLine,
-    band_px: int = DEFAULT_SURFACE_BAND_PX,
+    band_px: int = DEFAULT_CONTACT_BAND_HALF_HEIGHT_PX,
 ) -> tuple[int, int] | None:
     """Outermost x bounds where the silhouette meets the surface-line band.
 
@@ -731,7 +731,7 @@ def component_measurement(
     # measurements are taken before clipping, so pixels just below the line
     # still participate in the contact-line measurement.
     contact_bounds = surface_intersection_bounds(
-        component, surface_line, config.surface_band_px
+        component, surface_line, config.contact_band_half_height_px
     )
     contact_bbox = None
     d_contact_px = 0.0
@@ -758,7 +758,7 @@ def component_measurement(
         surface_line,
         SURFACE_MASK_BELOW_TOLERANCE_PX,
     )
-    clipped_component = largest_component(component, config.min_droplet_area_px2)
+    clipped_component = largest_component(component, config.min_component_area_px2)
     if clipped_component.any():
         component = clipped_component
     area = int(component.sum())
@@ -863,7 +863,7 @@ def select_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_droplet_area_px2:
+        if area < config.min_component_area_px2:
             continue
 
         bbox = component_bbox(component)
@@ -873,7 +873,7 @@ def select_calibration_component(
         vertical_span = y_max - y_min + 1
         below_surface = int(component[coarse_surface_y:].sum())
         above_surface = int(component[:coarse_surface_y].sum())
-        if below_surface < config.min_droplet_area_px2 or above_surface < config.min_droplet_area_px2:
+        if below_surface < config.min_component_area_px2 or above_surface < config.min_component_area_px2:
             continue
         if y_max < coarse_surface_y + config.mirror_min_depth_px:
             continue
@@ -963,7 +963,7 @@ def select_symmetric_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_droplet_area_px2:
+        if area < config.min_component_area_px2:
             continue
 
         bbox = component_bbox(component)
@@ -983,7 +983,7 @@ def select_symmetric_calibration_component(
             continue
 
         symmetry_y, symmetry_error = estimate_vertical_symmetry_y(component, bbox)
-        min_side_area = min(config.min_droplet_area_px2, max(1, area // 10))
+        min_side_area = min(config.min_component_area_px2, max(1, area // 10))
         above_area = int(component[:symmetry_y].sum())
         below_area = int(component[symmetry_y + 1 :].sum())
         if above_area < min_side_area or below_area < min_side_area:
@@ -998,7 +998,7 @@ def select_symmetric_calibration_component(
     return best[1], best[2]
 
 
-def detect_reflection_mode(
+def detect_surface_calibration_method(
     mask: np.ndarray,
     coarse_surface_y: int,
     config: AnalysisConfig,
@@ -1092,8 +1092,8 @@ def calibration_frame_mask(
     frame_number: int,
     threshold: float,
     structure: np.ndarray,
-    weak_threshold: float | None = None,
-    weak_reach_px: int = DEFAULT_WEAK_REACH_PX,
+    weak_change_threshold: float | None = None,
+    weak_growth_steps: int = DEFAULT_WEAK_GROWTH_STEPS,
 ) -> np.ndarray:
     matching_file = next(
         (path for path in files if frame_number_from_filename(path) == frame_number),
@@ -1108,12 +1108,12 @@ def calibration_frame_mask(
         background,
         threshold,
         structure,
-        weak_threshold,
-        weak_reach_px,
+        weak_change_threshold,
+        weak_growth_steps,
     )
 
 
-def detect_reflection_mode_from_frame(
+def detect_surface_calibration_method_from_frame(
     files: list[Path],
     background: np.ndarray,
     frame_number: int,
@@ -1121,7 +1121,7 @@ def detect_reflection_mode_from_frame(
     coarse_surface_y: int,
     config: AnalysisConfig,
     structure: np.ndarray,
-    weak_threshold: float | None = None,
+    weak_change_threshold: float | None = None,
 ) -> str:
     mask = calibration_frame_mask(
         files,
@@ -1129,10 +1129,10 @@ def detect_reflection_mode_from_frame(
         frame_number,
         threshold,
         structure,
-        weak_threshold,
-        config.weak_reach_px,
+        weak_change_threshold,
+        config.weak_growth_steps,
     )
-    return detect_reflection_mode(mask, coarse_surface_y, config)
+    return detect_surface_calibration_method(mask, coarse_surface_y, config)
 
 
 def select_nonreflection_calibration_component(
@@ -1148,7 +1148,7 @@ def select_nonreflection_calibration_component(
     for label in range(1, count + 1):
         component = labels == label
         area = int(component.sum())
-        if area < config.min_droplet_area_px2 or area <= best_area:
+        if area < config.min_component_area_px2 or area <= best_area:
             continue
         bbox = component_bbox(component)
         if bbox is None:
@@ -1170,8 +1170,8 @@ def calibration_target_center_x(
     coarse_surface_y: int,
     config: AnalysisConfig,
     structure: np.ndarray,
-    reflection_mode: str,
-    weak_threshold: float | None = None,
+    surface_calibration_method: str,
+    weak_change_threshold: float | None = None,
 ) -> float | None:
     """Return the calibrated droplet's horizontal centre, when available.
 
@@ -1185,10 +1185,10 @@ def calibration_target_center_x(
         frame_number,
         threshold,
         structure,
-        weak_threshold,
-        config.weak_reach_px,
+        weak_change_threshold,
+        config.weak_growth_steps,
     )
-    if reflection_mode == "none":
+    if surface_calibration_method == "none":
         component = select_nonreflection_calibration_component(mask, config)
         bbox = component_bbox(component) if component is not None else None
     else:
@@ -1272,7 +1272,7 @@ def estimate_surface_line_from_nonreflection_frame(
     config: AnalysisConfig,
     structure: np.ndarray,
     angle_override_deg: float | None = None,
-    weak_threshold: float | None = None,
+    weak_change_threshold: float | None = None,
 ) -> SurfaceLine:
     """Fit the surface to the impacted droplet's lower contour."""
     mask = calibration_frame_mask(
@@ -1281,8 +1281,8 @@ def estimate_surface_line_from_nonreflection_frame(
         frame_number,
         threshold,
         structure,
-        weak_threshold,
-        config.weak_reach_px,
+        weak_change_threshold,
+        config.weak_growth_steps,
     )
     component = select_nonreflection_calibration_component(mask, config)
     if component is None:
@@ -1302,7 +1302,7 @@ def estimate_surface_line_from_symmetry_frame(
     config: AnalysisConfig,
     structure: np.ndarray,
     angle_override_deg: float | None = None,
-    weak_threshold: float | None = None,
+    weak_change_threshold: float | None = None,
 ) -> SurfaceLine:
     mask = calibration_frame_mask(
         files,
@@ -1310,8 +1310,8 @@ def estimate_surface_line_from_symmetry_frame(
         frame_number,
         threshold,
         structure,
-        weak_threshold,
-        config.weak_reach_px,
+        weak_change_threshold,
+        config.weak_growth_steps,
     )
     selected = select_calibration_component(mask, coarse_surface_y, config)
     if selected is None:

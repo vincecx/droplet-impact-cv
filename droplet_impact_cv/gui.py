@@ -106,7 +106,7 @@ def resolve_output_config(
     if folder.exists() and not folder.is_dir():
         raise ValueError("The output folder must be a directory.")
     if mode == "custom" and folder == (config.output_dir or config.output_csv.parent).resolve():
-        # Preserve legacy per-file overrides when opening a configured folder.
+        # Preserve per-file overrides when opening a configured folder.
         return replace(config, output_dir=folder)
     return replace(
         config, output_dir=folder, output_csv=folder / OUTPUT_CSV_FILENAME,
@@ -189,7 +189,7 @@ class PreviewSession:
         details = (
             f"{path.name} | Area: {measurement.area_px2} px2 | "
             f"Strong threshold: {self.prepared.threshold:g} | "
-            f"Weak threshold: {self.prepared.weak_threshold:g}"
+            f"Weak threshold: {self.prepared.weak_change_threshold:g}"
         )
         if self.prepared.threshold_sampling_method != "manual":
             details += (
@@ -227,25 +227,25 @@ PARAMETERS = (
               "Choose an image number after impact where the drop meets the substrate. This image sets the substrate line; changing it can move that line. Auto uses the clean background.", True),
     Parameter("top_exclusion_ratio", "Exclude top image fraction", 0, 1, 0.01,
               "Fraction of image height excluded from droplet detection at the top. 0 includes all rows; 1 excludes all rows. Background and surface calibration use the full image."),
-    Parameter("strong_threshold", "Strong change threshold (gray)", 1, 4095, 1,
+    Parameter("strong_change_threshold", "Strong change threshold (gray)", 1, 4095, 1,
               "Threshold on absolute brightening or darkening relative to the clean background, in gray levels. Seeds the candidate liquid; it is not a raw image-brightness cutoff.", True),
-    Parameter("min_strong_threshold", "Min auto strong threshold (gray)", 1, 4095, 1,
+    Parameter("min_strong_change_threshold", "Min auto strong threshold (gray)", 1, 4095, 1,
               "Lowest main threshold allowed in Auto mode (default 200). Auto samples around contact or a sustained shape change, with background noise setting the effective threshold."),
-    Parameter("weak_threshold", "Weak change threshold (gray)", 1, 4095, 1,
+    Parameter("weak_change_threshold", "Weak change threshold (gray)", 1, 4095, 1,
               "Lower threshold on absolute change from the clean background. Connected weak-change pixels can extend the strong candidate when growth steps are positive; lower values recover faint edges but can admit shadows.", True),
-    Parameter("weak_threshold_ratio", "Weak / strong change ratio", 0.001, 1, 0.001,
+    Parameter("weak_change_threshold_ratio", "Weak / strong change ratio", 0.001, 1, 0.001,
               "Sets the faint threshold as a fraction of the main threshold when faint detection is Auto. Lower ratios include fainter liquid near the drop."),
-    Parameter("weak_reach_px", "Weak growth limit (steps)", 0, 200, 1,
+    Parameter("weak_growth_steps", "Weak growth limit (steps)", 0, 200, 1,
               "Maximum 4-neighbor growth steps through weak-change pixels from any strong pixel, before outline cleanup. This is not a circular radius. 0 disables weak extension; larger values recover more thin liquid but may admit shadows."),
-    Parameter("min_droplet_area_px2", "Min component area (px2)", 1, 10000, 1,
+    Parameter("min_component_area_px2", "Min component area (px2)", 1, 10000, 1,
               "Minimum detected component area. Candidates may include below-surface reflections; the reported liquid area is gas-side only. Also filters components after surface clipping."),
     Parameter("morphology_radius_px", "Outline cleanup radius (px)", 0, 15, 1,
               "Radius of the elliptical cleanup kernel; its width is 2*radius+1. 0 disables gap-closing and speck-removal morphology. Enclosed-hole filling and component selection remain active."),
-    Parameter("surface_band_px", "Contact-band half-height (px)", 0, 30, 1,
+    Parameter("contact_band_half_height_px", "Contact-band half-height (px)", 0, 30, 1,
               "Vertical y tolerance above and below the surface at each x, not total band thickness or surface-normal distance. Increasing it can count liquid away from the surface."),
     Parameter("foreground_depth_px", "Search depth below surface (px)", 0, 500, 1,
               "Candidate-search depth vertically below the substrate line. Final reported area is clipped to the gas side; this does not move the substrate line."),
-    Parameter("min_contact_px", "Min gas-side area (px2)", 0, 1000, 1,
+    Parameter("min_gas_area_px2", "Min gas-side area (px2)", 0, 1000, 1,
               "Minimum total detected area on or above the surface for a selected component. Applies to detached drops too; it is not a contact-line width. CLI: --min-gas-area-px2."),
     Parameter("surface_y_px", "Surface center y (px)", 0, 2048, 1,
               "Position (y-coordinate) of the substrate line at the image center. Larger values move it downward. Auto uses the detected line.", True),
@@ -257,9 +257,9 @@ PARAMETERS = (
 
 PARAMETER_GROUPS = (
     ("Experiment and scale", ("fps", "pixel_size_mm_per_px")),
-    ("Substrate and width measurement", ("droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px", "surface_angle_deg", "surface_band_px", "mirror_min_depth_px")),
-    ("Liquid detection", ("top_exclusion_ratio", "strong_threshold", "min_strong_threshold", "weak_threshold", "weak_threshold_ratio", "weak_reach_px", "foreground_depth_px")),
-    ("Drop selection and outline cleanup", ("min_droplet_area_px2", "min_contact_px", "morphology_radius_px")),
+    ("Substrate and width measurement", ("droplet_size_ref_frame", "surface_calibration_frame", "surface_y_px", "surface_angle_deg", "contact_band_half_height_px", "mirror_min_depth_px")),
+    ("Liquid detection", ("top_exclusion_ratio", "strong_change_threshold", "min_strong_change_threshold", "weak_change_threshold", "weak_change_threshold_ratio", "weak_growth_steps", "foreground_depth_px")),
+    ("Drop selection and outline cleanup", ("min_component_area_px2", "min_gas_area_px2", "morphology_radius_px")),
 )
 STATUS_COLORS = {"busy": "#a66b00", "ready": "#16803c", "error": "#b42318", "idle": "#526071"}
 
@@ -434,16 +434,16 @@ class ParameterControl(ttk.Frame):
             raise ValueError("Enter a valid number.") from None
         if not math.isfinite(number):
             raise ValueError("Enter a finite value.")
-        if self.spec.name in ("strong_threshold", "weak_threshold", "min_strong_threshold", "weak_threshold_ratio", "fps", "pixel_size_mm_per_px"):
+        if self.spec.name in ("strong_change_threshold", "weak_change_threshold", "min_strong_change_threshold", "weak_change_threshold_ratio", "fps", "pixel_size_mm_per_px"):
             if number <= 0:
                 raise ValueError("Enter a positive value.")
         elif self.spec.name != "surface_angle_deg" and number < self.spec.low:
             raise ValueError(f"Enter a value >= {self.spec.low:g}.")
-        if self.spec.name in ("weak_threshold_ratio", "top_exclusion_ratio") and number > 1:
+        if self.spec.name in ("weak_change_threshold_ratio", "top_exclusion_ratio") and number > 1:
             raise ValueError("Ratio must be <= 1.")
-        if self.spec.name in ("surface_y_px", "weak_reach_px", "min_droplet_area_px2",
-                              "morphology_radius_px", "surface_band_px", "foreground_depth_px",
-                              "min_contact_px", "surface_calibration_frame", "droplet_size_ref_frame", "mirror_min_depth_px"):
+        if self.spec.name in ("surface_y_px", "weak_growth_steps", "min_component_area_px2",
+                              "morphology_radius_px", "contact_band_half_height_px", "foreground_depth_px",
+                              "min_gas_area_px2", "surface_calibration_frame", "droplet_size_ref_frame", "mirror_min_depth_px"):
             if not number.is_integer():
                 raise ValueError("Enter a whole number.")
             return int(number)
@@ -487,7 +487,7 @@ class DropletApp:
         self.details = tk.StringVar()
         self.reflection = tk.StringVar(value="auto")
         self.rim_to_rim = tk.BooleanVar()
-        self.shadow_suppression = tk.BooleanVar(value=True)
+        self.approach_shadow_guard = tk.BooleanVar(value=True)
         self.output_mode = tk.StringVar(value="input")
         self.custom_output = tk.StringVar()
         self.output_summary = tk.StringVar(value="Choose an input folder first.")
@@ -576,7 +576,7 @@ class DropletApp:
         row.pack(fill="x", pady=(8, 0))
         ttk.Label(row, text="Surface calibration method").pack(side="left")
         ttk.Button(row, text="Reset", width=6,
-                   command=lambda: self.reset_choice("reflection_mode")).pack(side="right")
+                   command=lambda: self.reset_choice("surface_calibration_method")).pack(side="right")
         self.reflection_combo = ttk.Combobox(surface_group, textvariable=self.reflection,
                              values=("auto", "mirror", "none"), state="readonly")
         self.reflection_combo.pack(fill="x")
@@ -593,9 +593,9 @@ class DropletApp:
         row = ttk.Frame(liquid_group)
         row.pack(fill="x", pady=(8, 0))
         ttk.Checkbutton(row, text="Approach / onset shadow guard",
-                        variable=self.shadow_suppression, command=self.schedule_preview).pack(side="left")
+                        variable=self.approach_shadow_guard, command=self.schedule_preview).pack(side="left")
         ttk.Button(row, text="Reset", width=6,
-                   command=lambda: self.reset_choice("shadow_suppression")).pack(side="right")
+                   command=lambda: self.reset_choice("approach_shadow_guard")).pack(side="right")
         responsive_label(liquid_group, text="Limit shadows during approach and initial contact using contour and preceding-frame evidence. This does not resolve contact during recoil or lift-off; ambiguous deformed drops retain their candidate outline and a review warning.").pack(fill="x", pady=4)
         right = ttk.Frame(content, padding=(12, 0, 0, 0))
         content.add(right, weight=1)
@@ -879,8 +879,8 @@ class DropletApp:
         if session is None:
             return
         resolved = {
-            "strong_threshold": session.prepared.threshold,
-            "weak_threshold": session.prepared.weak_threshold,
+            "strong_change_threshold": session.prepared.threshold,
+            "weak_change_threshold": session.prepared.weak_change_threshold,
             "surface_y_px": session.prepared.surface_line.center_y_int(),
             "surface_angle_deg": session.prepared.surface_line.angle_deg,
             "surface_calibration_frame": frame_number_from_filename(session.prepared.files[-1]),
@@ -891,14 +891,14 @@ class DropletApp:
         for name, control in self.controls.items():
             value = getattr(session.base_config, name)
             control.set_value(value, resolved.get(name, value))
-        self.reflection.set(session.base_config.reflection_mode)
+        self.reflection.set(session.base_config.surface_calibration_method)
         self.rim_to_rim.set(session.base_config.rim_to_rim)
-        self.shadow_suppression.set(session.base_config.shadow_suppression)
+        self.approach_shadow_guard.set(session.base_config.approach_shadow_guard)
 
     def overrides(self) -> dict:
         result = {name: control.get_value() for name, control in self.controls.items()}
-        result.update(reflection_mode=self.reflection.get(), rim_to_rim=self.rim_to_rim.get())
-        result["shadow_suppression"] = self.shadow_suppression.get()
+        result.update(surface_calibration_method=self.reflection.get(), rim_to_rim=self.rim_to_rim.get())
+        result["approach_shadow_guard"] = self.approach_shadow_guard.get()
         frames = {frame_number_from_filename(path) for path in self.session.prepared.files}
         for name, label in (("surface_calibration_frame", "Surface calibration frame"),
                             ("droplet_size_ref_frame", "Droplet size reference frame")):
@@ -909,8 +909,8 @@ class DropletApp:
     def reset_choice(self, name: str):
         if self.session is None or self.processing:
             return
-        variable = {"reflection_mode": self.reflection, "rim_to_rim": self.rim_to_rim,
-                    "shadow_suppression": self.shadow_suppression}[name]
+        variable = {"surface_calibration_method": self.reflection, "rim_to_rim": self.rim_to_rim,
+                    "approach_shadow_guard": self.approach_shadow_guard}[name]
         variable.set(getattr(self.session.base_config, name))
         self.schedule_preview()
 
@@ -927,9 +927,9 @@ class DropletApp:
             path = config.input_dir / CONFIG_FILENAME
             backup = messagebox.askyesnocancel(
                 "Save cv_config.txt",
-                "Back up the existing cv_config.txt before saving?\n\n"
-                "Yes: rename it to cv_config.txt.bak (replace any previous backup).\n"
-                "No: overwrite without a backup.\nCancel: do not save.",
+                "Back up the existing cv_config.txt before saving? "
+                "Yes: rename it to cv_config.txt.bak (replace any previous backup). "
+                "No: overwrite without a backup. Cancel: do not save.",
                 parent=self.root,
             )
             if backup is None:
@@ -1071,8 +1071,8 @@ class DropletApp:
             return
         frame = frame_number_from_filename(self.session.prepared.files[self.selection_frame_index])
         keep_auto_tilt = self.controls["surface_angle_deg"].auto.get() and messagebox.askyesno(
-            "Surface Tilt", "Keep Surface tilt on Auto?\n\n"
-            "Yes: detect the tilt automatically using the selected calibration frame.\n"
+            "Surface Tilt", "Keep Surface tilt on Auto? "
+            "Yes: detect the tilt automatically using the selected calibration frame. "
             "No: turn off Auto and use the tilt of the manually selected line.",
             parent=self.root,
         )
@@ -1210,8 +1210,8 @@ class DropletApp:
                     before, after, details = result
                     prepared = self.session.prepared
                     resolved = {
-                        "strong_threshold": prepared.threshold,
-                        "weak_threshold": prepared.weak_threshold,
+                        "strong_change_threshold": prepared.threshold,
+                        "weak_change_threshold": prepared.weak_change_threshold,
                         "surface_y_px": prepared.surface_line.center_y_int(),
                         "surface_angle_deg": prepared.surface_line.angle_deg,
                         "surface_calibration_frame": frame_number_from_filename(prepared.files[-1]),
